@@ -78,6 +78,7 @@ import {
 import { HEADER_H, FOOTER_H } from "@/lib/layout-constants";
 import { useTheme } from "@/components/theme-provider";
 import type { LeftView } from "./activity-strip";
+import type { FileNode } from "@/state/editor";
 
 /**
  * Left sidebar — renders the column header (3 view-switcher tabs:
@@ -103,6 +104,11 @@ interface LeftSidebarProps {
   onOpenVaultPicker?: () => void;
   onOpenSettings?: () => void;
   onOpenHelp?: () => void;
+  /** When provided, the Files view renders the actual vault tree
+   *  instead of the labelled stub list. */
+  vaultTree?: FileNode[];
+  /** Called when the user clicks a non-folder node in the vault tree. */
+  onOpenFile?: (fileId: string) => void;
 }
 
 export function LeftSidebar({
@@ -114,6 +120,8 @@ export function LeftSidebar({
   onOpenVaultPicker,
   onOpenSettings,
   onOpenHelp,
+  vaultTree,
+  onOpenFile,
 }: LeftSidebarProps) {
   return (
     <div className={cn("flex h-full w-full flex-col", bgSidebar)}>
@@ -124,7 +132,7 @@ export function LeftSidebar({
         isMac={isMac}
       />
       <Toolbar view={view} />
-      <Body view={view} />
+      <Body view={view} vaultTree={vaultTree} onOpenFile={onOpenFile} />
       <Footer
         vaultName={vaultName}
         onOpenVaultPicker={onOpenVaultPicker}
@@ -239,12 +247,22 @@ function Toolbar({ view }: { view: LeftView }) {
 
 // ─── Body (stub per view) ───────────────────────────────────────────
 
-function Body({ view }: { view: LeftView }) {
+function Body({
+  view,
+  vaultTree,
+  onOpenFile,
+}: {
+  view: LeftView;
+  vaultTree?: FileNode[];
+  onOpenFile?: (fileId: string) => void;
+}) {
   return (
     <ScrollArea className="flex-1 min-h-0">
       <div className="flex flex-col py-0.5">
         {view === "files" && (
-          <StubList items={["Welcome.md", "Inbox.md", "Daily/", "Projects/"]} />
+          vaultTree
+            ? <VaultTree nodes={vaultTree} depth={0} onOpenFile={onOpenFile} />
+            : <StubList items={["Welcome.md", "Inbox.md", "Daily/", "Projects/"]} />
         )}
         {view === "search" && (
           <div className="px-2 py-1 space-y-2">
@@ -290,6 +308,114 @@ function Body({ view }: { view: LeftView }) {
         )}
       </div>
     </ScrollArea>
+  );
+}
+
+// ─── Real vault tree ────────────────────────────────────────────────
+
+/**
+ * Recursive vault renderer used by the Files view when MOCK_VAULT
+ * (or, later, the real Tauri vault) is wired in. Folders toggle their
+ * expansion in local state; file clicks bubble up to `onOpenFile`.
+ *
+ * Kept intentionally lean — no hover previews, no context menu — so
+ * we can exercise the editor surfaces (codemirror / preview / slides /
+ * graph / pdf) without dragging the whole stub-list decoration along.
+ */
+function VaultTree({
+  nodes,
+  depth,
+  onOpenFile,
+}: {
+  nodes: FileNode[];
+  depth: number;
+  onOpenFile?: (fileId: string) => void;
+}) {
+  // Sort: folders first, then files, each alpha by name.
+  const sorted = React.useMemo(
+    () =>
+      [...nodes].sort((a, b) => {
+        const aFolder = a.kind === "folder";
+        const bFolder = b.kind === "folder";
+        if (aFolder !== bFolder) return aFolder ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      }),
+    [nodes],
+  );
+  return (
+    <ul className="flex flex-col gap-0.5 px-1.5 py-1">
+      {sorted.map((node) => (
+        <VaultTreeNode
+          key={node.id}
+          node={node}
+          depth={depth}
+          onOpenFile={onOpenFile}
+        />
+      ))}
+    </ul>
+  );
+}
+
+function VaultTreeNode({
+  node,
+  depth,
+  onOpenFile,
+}: {
+  node: FileNode;
+  depth: number;
+  onOpenFile?: (fileId: string) => void;
+}) {
+  const [open, setOpen] = React.useState(depth < 1);
+  const isFolder = node.kind === "folder";
+  // Pick an icon hint per kind. Markdown / canvas / pdf / graph all
+  // reuse the generic file glyph since we only ship IcFolder + the
+  // common file icons in this strip.
+  const handleClick = () => {
+    if (isFolder) {
+      setOpen((v) => !v);
+      return;
+    }
+    onOpenFile?.(node.id);
+  };
+  return (
+    <li className="flex flex-col gap-0.5">
+      <button
+        type="button"
+        onClick={handleClick}
+        className={cn(
+          "flex items-center gap-1.5 h-6 rounded-[4px] text-left text-[12px] select-none cursor-pointer",
+          "px-2",
+          textNormal,
+          hoverBg,
+        )}
+        style={{ paddingLeft: 8 + depth * 12 }}
+      >
+        {isFolder ? (
+          <IcChevronDown
+            className={cn(
+              "[width:var(--icon-xs)] [height:var(--icon-xs)] shrink-0 transition-transform",
+              !open && "-rotate-90",
+            )}
+          />
+        ) : (
+          <span className="[width:var(--icon-xs)] [height:var(--icon-xs)] shrink-0" />
+        )}
+        <IcFolder
+          className={cn(
+            "[width:var(--icon-sm)] [height:var(--icon-sm)] shrink-0",
+            !isFolder && "opacity-60",
+          )}
+        />
+        <span className="truncate">{node.name}</span>
+      </button>
+      {isFolder && open && node.children && (
+        <VaultTree
+          nodes={node.children}
+          depth={depth + 1}
+          onOpenFile={onOpenFile}
+        />
+      )}
+    </li>
   );
 }
 

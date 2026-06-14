@@ -10,6 +10,105 @@
  */
 import type { FileNode } from "./types";
 
+/**
+ * Showcase note — exercises every renderer surface so we can eyeball
+ * the editor stack end-to-end:
+ *   • headings / lists / tables / blockquotes / inline code
+ *   • [[wikilinks]] (both plain and piped) — click in preview to jump
+ *   • task lists
+ *   • fenced code blocks (syntax-highlighted in source, KaTeX/mermaid
+ *     in preview)
+ *   • inline + block KaTeX math
+ *   • a mermaid diagram
+ *   • slide separators (`---`) so toggling Slides view works
+ *
+ * Open this file from the left sidebar, then use the eye icon in the
+ * doc-header to toggle Source ↔ Reading, or the ⋯ menu → "Slides view"
+ * to see Reveal.js take over.
+ */
+const FEATURE_TOUR_MD = `# Feature tour
+
+A single note that exercises every editor surface in flux.
+
+> Toggle **Reading view** in the doc-header to render this with
+> markdown-it + KaTeX + mermaid. Toggle **Slides view** from the
+> overflow menu to see Reveal.js split on \`---\`.
+
+## Wikilinks
+
+Plain: [[welcome]]
+Piped: [[projects/flux|the flux roadmap]]
+Missing target (won't resolve): [[ghost-note]]
+
+## Task list
+
+- [x] Render headings
+- [x] Render task checkboxes
+- [ ] Wire real vault writes
+- [ ] Persist scroll position across mode toggles
+
+## Table
+
+| Surface       | Library          | Trigger              |
+| ------------- | ---------------- | -------------------- |
+| Editor        | CodeMirror 6     | default              |
+| Preview       | markdown-it      | eye icon             |
+| Slides        | Reveal.js        | ⋯ → Slides view      |
+| Graph         | force-graph      | "Graph" in sidebar   |
+| PDF           | pdf.js           | open a .pdf file     |
+
+## Code
+
+\`\`\`ts
+import { CodeMirrorEditor } from "@/components/flux-ui/editor/codemirror-editor";
+
+export function Demo() {
+  return <CodeMirrorEditor content="# hi" filePath="/x.md" onChange={() => {}} onSave={() => {}} />;
+}
+\`\`\`
+
+## Math (KaTeX)
+
+Inline: the Euler identity \\(e^{i\\pi} + 1 = 0\\) — or in dollars: $a^2 + b^2 = c^2$.
+
+Block:
+
+$$
+\\int_{-\\infty}^{\\infty} e^{-x^2}\\,dx = \\sqrt{\\pi}
+$$
+
+## Diagram (Mermaid)
+
+\`\`\`mermaid
+flowchart LR
+  A[Source] -->|toggle| B[Preview]
+  B -->|⋯ menu| C[Slides]
+  A --> D[Graph]
+  A --> E[PDF]
+\`\`\`
+
+---
+
+## Slide two
+
+Anything after a top-level \`---\` becomes a new slide in Reveal.js,
+but stays a horizontal rule in the reading view.
+
+- Bullet A
+- Bullet B
+- Bullet C
+
+---
+
+## Slide three
+
+\`\`\`bash
+pnpm dev
+\`\`\`
+
+Press <kbd>Esc</kbd> in Slides view to see the overview grid.
+`;
+
 export const MOCK_VAULT_TREE: FileNode[] = [
   {
     id: "/welcome.md",
@@ -49,6 +148,18 @@ export const MOCK_VAULT_TREE: FileNode[] = [
     name: "scratch.md",
     kind: "file",
     content: "# Scratch\n\nQuick notes go here.",
+  },
+  {
+    id: "/feature-tour.md",
+    name: "feature-tour.md",
+    kind: "file",
+    content: FEATURE_TOUR_MD,
+  },
+  {
+    id: "/graph",
+    name: "Graph",
+    kind: "graph",
+    content: "",
   },
 ];
 

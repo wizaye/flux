@@ -23,10 +23,16 @@ import {
 } from "@/state/editor";
 import { readDragPayload } from "./drag-ghost";
 import { TabButton } from "./tab-button";
-import { PaneDocHeader } from "./pane-doc-header";
-import { EmptyTab, PlaceholderEditor } from "./empty-tab";
+import { EmptyTab } from "./empty-tab";
 import { DropOverlay, TabInsertionMarker } from "./drop-overlay";
 import { TabbarOptionsMenu } from "./tabbar-options-menu";
+import { CodeMirrorEditor } from "./views/codemirror-editor";
+import { MarkdownPreview } from "./views/markdown-preview";
+import { SlidesView } from "./views/slides-view";
+import { PdfView } from "./views/pdf-view";
+import { GraphView } from "./views/graph-view";
+import type { EditorViewProps, PaneActions } from "./views/types";
+import { useEditorStore } from "@/state/editor-store";
 
 /**
  * A single editor pane: tabbar (with sidebar-toggle insets) + doc-header
@@ -267,6 +273,38 @@ export function Pane(props: PaneProps) {
       ),
     }));
   };
+  const setViewMode = (tabId: string, mode: "source" | "preview" | "slides") => {
+    onMutateLeaf(leaf.id, (l) => ({
+      ...l,
+      tabs: l.tabs.map((t) => (t.id === tabId ? { ...t, viewMode: mode } : t)),
+    }));
+  };
+  // Open the first matching markdown file (by base name) in the active tab.
+  const openByName = React.useCallback(
+    (targetName: string) => {
+      const wanted = targetName.toLowerCase().replace(/\.md$/i, "");
+      let match: FileNode | null = null;
+      for (const node of vault.values()) {
+        if (node.kind !== "file") continue;
+        const base = node.name.toLowerCase().replace(/\.md$/i, "");
+        if (base === wanted) {
+          match = node;
+          break;
+        }
+      }
+      if (!match) return;
+      const file = match;
+      onMutateLeaf(leaf.id, (l) => ({
+        ...l,
+        tabs: l.tabs.map((t) =>
+          t.id === l.activeTabId
+            ? { ...t, fileId: file.id, title: file.name.replace(/\.md$/i, "") }
+            : t,
+        ),
+      }));
+    },
+    [leaf.id, onMutateLeaf, vault],
+  );
   const newTab = () => {
     onMutateLeaf(leaf.id, (l) => {
       const t: Tab = { id: uid("tab"), fileId: null, title: "New tab" };
@@ -454,28 +492,15 @@ export function Pane(props: PaneProps) {
         />
       </div>
 
-      {/* ── doc-header ──────────────────────────────────────────────── */}
-      <PaneDocHeader
-        tab={activeTab}
-        onSplit={(edge) => onSplitLeaf(leaf.id, edge)}
-        onToggleReading={() => activeTab && toggleReading(activeTab.id)}
-        onRename={() => { /* stub */ }}
-        onCopyPath={() => activeTab && copyToClipboard(activeTab.fileId ?? "")}
-        onShowInExplorer={() => { /* stub */ }}
-        onRevealInNav={() => { /* stub */ }}
-        onDelete={() => activeTab && closeTab(activeTab.id)}
-        // The doc-header sits BELOW the 36 px-tall WindowControls
-        // cluster (which lives in the tabbar row at y: 0\u201336). So
-        // Split / Reading-view / More-options are free to slide all
-        // the way to the editor column's right edge \u2014 no inset
-        // reservation needed regardless of sidebar state. Only the
-        // tabbar row above needs `topRightInsetPx` to dodge the
-        // caption buttons.
-        topRightInsetPx={0}
-        dragging={dragging}
-      />
-
       {/* ── body + drop overlay ─────────────────────────────────────── */}
+      {/* NB: there is intentionally NO unconditional <PaneDocHeader/>
+          here anymore. Each editor view implements the EditorViewProps
+          contract and wraps its body in <EditorPaneLayout/>, which
+          renders the doc-header itself when the view opts in
+          (markdown / slides / pdf / codemirror) and OMITS it entirely
+          when the view owns its own chrome (graph). See
+          flux/src/components/flux-ui/editor/views/types.ts and
+          ./views/editor-pane-layout.tsx for the contract. */}
       <div
         ref={bodyRef}
         className="relative flex-1 min-h-0 min-w-0 flex"
@@ -483,7 +508,30 @@ export function Pane(props: PaneProps) {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        <PaneBody tab={activeTab} vault={vault} onNewTab={newTab} onCloseTab={() => activeTab && closeTab(activeTab.id)} />
+        <PaneBody
+          tab={activeTab}
+          vault={vault}
+          paneActions={{
+            onSplit: (edge) => onSplitLeaf(leaf.id, edge),
+            onToggleReading: () => activeTab && toggleReading(activeTab.id),
+            onSetSlides: () => activeTab && setViewMode(activeTab.id, "slides"),
+            onRename: () => { /* stub — vault rename lands later */ },
+            onCopyPath: () => activeTab && copyToClipboard(activeTab.fileId ?? ""),
+            onShowInExplorer: () => { /* stub — Tauri FS reveal lands later */ },
+            onRevealInNav: () => { /* stub — left-sidebar reveal lands later */ },
+            onDelete: () => activeTab && closeTab(activeTab.id),
+            // The doc-header sits BELOW the 36px-tall window controls
+            // cluster (which lives in the tabbar row above). So Split /
+            // Reading-view / More-options are free to slide all the
+            // way to the editor column's right edge — no inset
+            // reservation needed regardless of sidebar state.
+            topRightInsetPx: 0,
+            dragging,
+          }}
+          onNewTab={newTab}
+          onCloseTab={() => activeTab && closeTab(activeTab.id)}
+          onOpenWikilink={openByName}
+        />
         {hoverEdge && <DropOverlay edge={hoverEdge} />}
       </div>
     </div>
@@ -493,13 +541,17 @@ export function Pane(props: PaneProps) {
 function PaneBody({
   tab,
   vault,
+  paneActions,
   onNewTab,
   onCloseTab,
+  onOpenWikilink,
 }: {
   tab: Tab | null;
   vault: Map<string, FileNode>;
+  paneActions: PaneActions;
   onNewTab: () => void;
   onCloseTab: () => void;
+  onOpenWikilink: (target: string) => void;
 }) {
   if (!tab || tab.fileId == null) {
     return (
@@ -511,7 +563,57 @@ function PaneBody({
     );
   }
   const file = vault.get(tab.fileId);
-  return <PlaceholderEditor content={file?.content ?? ""} title={tab.title} />;
+  const overrideContent = useEditorStore((s) => s.fileContents.get(tab.fileId!));
+  const setFileContent = useEditorStore((s) => s.setFileContent);
+  const markDirty = useEditorStore((s) => s.markDirty);
+  const markClean = useEditorStore((s) => s.markClean);
+
+  if (!file) {
+    return (
+      <div className="flex-1 min-h-0 flex items-center justify-center text-muted-foreground text-sm">
+        File not found.
+      </div>
+    );
+  }
+
+  // Resolve effective text-content once (used by markdown / slides /
+  // source views; pdf + graph ignore it).
+  const content = overrideContent ?? file.content ?? "";
+
+  // Common bundle every view receives. Each view spreads what it
+  // needs from this; unknown extras are simply ignored.
+  const baseProps: EditorViewProps = {
+    tab,
+    file,
+    content,
+    vault,
+    paneActions,
+    onOpenWikilink,
+    onOpenFile: (id) => onOpenWikilink(vault.get(id)?.name ?? id),
+    onChange: (next) => {
+      setFileContent(file.id, next);
+      markDirty(file.id);
+    },
+    onSave: () => {
+      // Mock-vault "save" — commit the in-memory override into the
+      // FileNode body and clear the dirty flag. Real-vault writes
+      // will replace this with a Tauri FS call.
+      if (overrideContent !== undefined) {
+        file.content = overrideContent;
+      }
+      markClean(file.id);
+    },
+  };
+
+  // Kind-based dispatch — graph + pdf ignore viewMode entirely.
+  if (file.kind === "graph") return <GraphView {...baseProps} />;
+  if (file.kind === "pdf") return <PdfView {...baseProps} />;
+
+  // Markdown surfaces (file + canvas treated as text for now).
+  const mode = tab.viewMode ?? "source";
+  if (mode === "preview") return <MarkdownPreview {...baseProps} />;
+  if (mode === "slides") return <SlidesView {...baseProps} />;
+  return <CodeMirrorEditor {...baseProps} />;
 }
 
 function copyToClipboard(text: string) {

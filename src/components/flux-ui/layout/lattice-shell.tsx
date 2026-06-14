@@ -36,8 +36,10 @@ import {
   type SplitTree,
   type Tab,
   MOCK_VAULT,
+  MOCK_VAULT_TREE,
   uid,
 } from "@/state/editor";
+import { mapLeaves, openTabInLeaf } from "@/state/editor";
 
 /**
  * Top-level shell ported from `lattice/src/App.tsx`. Owns:
@@ -241,6 +243,29 @@ export function LatticeShell() {
     }
     setTree(next);
   }, []);
+
+  /**
+   * Open a vault file in the active leaf. If the file is already open
+   * in that leaf, just focus the existing tab (handled by
+   * `openTabInLeaf`). Otherwise append a new tab and focus it. Used
+   * by the LeftSidebar's file tree click handler.
+   */
+  const handleOpenFile = React.useCallback(
+    (fileId: string) => {
+      const node = MOCK_VAULT.get(fileId);
+      if (!node || node.kind === "folder") return;
+      const title = node.name.replace(/\.md$/i, "");
+      setTree((cur) => {
+        const next = mapLeaves(cur, (leaf) =>
+          leaf.id === activeLeafId
+            ? openTabInLeaf(leaf, { id: uid("tab"), fileId, title })
+            : leaf,
+        );
+        return next ?? cur;
+      });
+    },
+    [activeLeafId],
+  );
 
   React.useEffect(() => {
     try { localStorage.setItem(LS_KEYS.editorTree, JSON.stringify(tree)); } catch { /* noop */ }
@@ -587,6 +612,8 @@ export function LatticeShell() {
             isMac={isMac}
             vaultName="My Vault"
             onOpenSettings={() => setSettingsOpen(true)}
+            vaultTree={MOCK_VAULT_TREE}
+            onOpenFile={handleOpenFile}
           />
         </div>
         {/* Right divider — full height when expanded */}

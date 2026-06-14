@@ -1,0 +1,220 @@
+/* Reading-mode (MarkdownPreview) styling.
+ * Ported (trimmed) from lattice/src/components/editor/EditorArea.css.
+ * Token surface (--text-normal, --accent, --border-strong, --hover,
+ * --bg-header, --font-text, --font-mono, --syn-*) is provided by
+ * flux/src/App.css. */
+
+.markdown-preview-host {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: transparent;
+  color: var(--text-normal);
+}
+
+.markdown-slides-host {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  background: transparent;
+  color: var(--text-normal);
+}
+
+.md-preview {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 48px 96px;
+  font-family: var(--font-text);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--text-normal);
+  word-wrap: break-word;
+}
+
+.md-preview h1,
+.md-preview h2,
+.md-preview h3,
+.md-preview h4,
+.md-preview h5,
+.md-preview h6 {
+  font-weight: 700;
+  line-height: 1.25;
+  margin: 1.4em 0 0.4em;
+  color: var(--text-normal);
+}
+
+.md-preview h1 { font-size: 1.9em; border-bottom: 1px solid var(--border-strong); padding-bottom: 0.2em; }
+.md-preview h2 { font-size: 1.5em; border-bottom: 1px solid var(--border-strong); padding-bottom: 0.15em; }
+.md-preview h3 { font-size: 1.25em; }
+.md-preview h4 { font-size: 1.1em; }
+.md-preview h5 { font-size: 1em; }
+.md-preview h6 { font-size: 0.9em; color: var(--text-muted); }
+
+.md-preview p { margin: 0.7em 0; }
+
+.md-preview a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.md-preview a:hover { text-decoration: underline; }
+
+.md-preview .md-wikilink {
+  color: var(--accent);
+  cursor: pointer;
+  border-bottom: 1px dashed currentColor;
+}
+.md-preview .md-wikilink:hover { background: var(--hover); }
+
+.md-preview ul,
+.md-preview ol {
+  padding-left: 1.6em;
+  margin: 0.5em 0;
+}
+.md-preview li {
+  margin: 0.15em 0;
+  padding-left: 0.15em;
+  position: relative;
+}
+.md-preview li > ul,
+.md-preview li > ol {
+  margin: 0.15em 0 0.25em;
+  padding-left: 1.3em;
+}
+.md-preview li:has(> ul, > ol)::before {
+  content: "";
+  position: absolute;
+  left: -0.65em;
+  top: 1.5em;
+  bottom: 0.1em;
+  width: 1px;
+  background: color-mix(in srgb, var(--text-faint) 45%, transparent);
+  pointer-events: none;
+}
+.md-preview li::marker { color: var(--text-faint); }
+
+.md-preview .task-list-item {
+  list-style-type: none !important;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 0;
+  margin: 0.3em 0;
+}
+.md-preview .md-task-checkbox {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  cursor: default;
+  flex-shrink: 0;
+}
+.md-preview .md-task-checkbox.md-task-inprogress {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  position: relative;
+}
+.md-preview .md-task-checkbox.md-task-inprogress::before {
+  content: "/";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--accent);
+  line-height: 1;
+}
+.md-preview .task-list-item-text { flex: 1; }
+
+.md-preview blockquote {
+  margin: 1em 0;
+  padding: 0.4em 1.2em;
+  border-left: 3px solid var(--accent);
+  color: var(--text-muted);
+  font-style: italic;
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  border-radius: 0 4px 4px 0;
+}
+
+.md-preview code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  padding: 0.1em 0.3em;
+  background: var(--hover);
+  border-radius: 3px;
+  color: var(--syn-mono, var(--text-normal));
+}
+
+.md-preview pre {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: color-mix(in srgb, var(--bg-header) 70%, #000 10%);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  margin: 1em 0;
+  line-height: 1.5;
+}
+.md-preview pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: 1em;
+  color: var(--text-normal);
+}
+
+.md-preview hr {
+  border: none;
+  border-top: 1px solid var(--border-strong);
+  margin: 2em 0;
+}
+
+.md-preview table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+  font-size: 0.95em;
+}
+.md-preview th,
+.md-preview td {
+  padding: 8px 14px;
+  border: 1px solid var(--border-strong);
+  text-align: left;
+}
+.md-preview th {
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-header));
+  font-weight: 600;
+  color: var(--text-normal);
+}
+.md-preview tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--bg-header) 90%, var(--text-faint) 10%);
+}
+
+.md-preview img { max-width: 100%; height: auto; border-radius: 6px; }
+
+.md-preview strong { font-weight: 700; color: var(--text-normal); }
+.md-preview em { font-style: italic; }
+.md-preview del { text-decoration: line-through; color: var(--text-muted); }
+
+.md-preview .mermaid-diagram { margin: 1em 0; text-align: center; }
+.md-preview .mermaid-error { color: #e57373; font-family: var(--font-mono); }
+
+/* ── KaTeX ── */
+.md-preview .katex,
+.md-preview .katex-display {
+  color: var(--text-normal);
+}
+.md-preview .katex-display {
+  margin: 0.9em 0;
+  padding: 0.1em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.md-preview .katex { line-height: 1.2; }
+.md-preview .katex-error {
+  color: #e57373;
+  border-bottom: 1px dotted #e57373;
+}

@@ -16,6 +16,22 @@ export default defineConfig(async () => ({
     },
   },
 
+  // Pre-bundle heavy editor-surface deps so dynamic `import()` calls in
+  // MarkdownPreview / PdfView / SlidesView / GraphView resolve to stable
+  // hashed chunks and don't 504 after HMR cycles.
+  optimizeDeps: {
+    include: [
+      "mermaid",
+      "markdown-it",
+      "markdown-it-texmath",
+      "katex",
+      "reveal.js",
+      "force-graph",
+      "pdfjs-dist",
+      "highlight.js",
+    ],
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

@@ -22,6 +22,8 @@ type Props = {
   tab: Tab | null;
   onSplit: (edge: "left" | "right" | "top" | "bottom") => void;
   onToggleReading: () => void;
+  /** Switch the active tab to Reveal.js slides view. */
+  onSetSlides: () => void;
   onRename: () => void;
   onCopyPath: () => void;
   onShowInExplorer: () => void;
@@ -39,6 +41,7 @@ export function PaneDocHeader({
   tab,
   onSplit,
   onToggleReading,
+  onSetSlides,
   onRename,
   onCopyPath,
   onShowInExplorer,
@@ -109,7 +112,7 @@ export function PaneDocHeader({
           onSetSource={() => {
             if (reading) onToggleReading();
           }}
-          onSetSlides={() => { /* stub — slides land in a later phase */ }}
+          onSetSlides={onSetSlides}
           onRename={onRename}
           onCopyPath={onCopyPath}
           onShowInExplorer={onShowInExplorer}

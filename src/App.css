@@ -82,6 +82,33 @@
     --sidebar-accent-foreground: oklch(0.205 0 0);
     --sidebar-border: oklch(0.922 0 0);
     --sidebar-ring: oklch(0.708 0 0);
+
+    /* ── Editor surface tokens (light) ──
+       Consumed by CodeMirror theme, markdown preview, slides, pdf,
+       and graph view. Kept here so flipping `.dark` on `<html>`
+       re-themes the whole editor stack without recreating the view. */
+    --text-normal: #2e2e2e;
+    --text-muted: #6b6b6b;
+    --text-faint: #909090;
+    --selection: rgba(127, 109, 242, 0.20);
+    --hover: rgba(0, 0, 0, 0.05);
+    --bg-header: #f3f3f1;
+    --border-strong: rgba(0, 0, 0, 0.12);
+    --font-text: 'Public Sans Variable', system-ui, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    --editor-font-size: 16px;
+    /* Syntax (light) — readable on white code-block bg */
+    --syn-mono: #7f6df2;
+    --syn-keyword: #d73a49;
+    --syn-string: #032f62;
+    --syn-comment: #6a737d;
+    --syn-number: #005cc5;
+    --syn-atom: #005cc5;
+    --syn-type: #6f42c1;
+    --syn-function: #6f42c1;
+    --syn-variable: #24292e;
+    --syn-tag: #22863a;
+    --syn-attr: #6f42c1;
 }
 
 .dark {
@@ -116,6 +143,27 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
+
+    /* ── Editor surface tokens (dark) ── */
+    --text-normal: #dcddde;
+    --text-muted: #8b8b8b;
+    --text-faint: #6a6a6a;
+    --selection: rgba(127, 109, 242, 0.35);
+    --hover: rgba(255, 255, 255, 0.06);
+    --bg-header: #1a1a1a;
+    --border-strong: rgba(255, 255, 255, 0.10);
+    /* Syntax (dark) — VS Code Dark+ inspired */
+    --syn-mono: #9cdcfe;
+    --syn-keyword: #c586c0;
+    --syn-string: #ce9178;
+    --syn-comment: #6a9955;
+    --syn-number: #b5cea8;
+    --syn-atom: #569cd6;
+    --syn-type: #4ec9b0;
+    --syn-function: #dcdcaa;
+    --syn-variable: #9cdcfe;
+    --syn-tag: #569cd6;
+    --syn-attr: #9cdcfe;
 }
 
 @layer base {
@@ -147,4 +195,47 @@
   html {
     @apply font-sans;
     }
+}
+
+/* ============================================================
+   Scrollbars
+   The default WebView2 / Chromium scrollbars are bright white on
+   dark surfaces and gray-on-gray on light surfaces — both look out
+   of place inside the editor. Match the rest of the chrome by
+   theming them off the same border / hover tokens used by the
+   panes, sidebar, and code blocks.
+
+   Ported from lattice/src/App.css scrollbar block.
+   ============================================================ */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.30);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+::-webkit-scrollbar-corner { background: transparent; }
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.10);
+  background-clip: padding-box;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.18);
+  background-clip: padding-box;
+}
+
+/* Firefox + modern Chromium fallback (no -webkit- prefix). */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.22) transparent;
+}
+.dark * {
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
 }
