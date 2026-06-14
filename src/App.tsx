@@ -1,41 +1,23 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
-import { Button } from "./components/ui/button";
-import { ArrowUpIcon } from "lucide-react"
-import { ModeToggle } from "./components/mode-toggle";
+import { LatticeShell } from "./components/flux-ui/layout/lattice-shell";
+import { IconScale } from "./components/flux-ui/common/icons";
+import { TooltipProvider } from "./components/ui/tooltip";
+import { Toaster } from "./components/ui/sonner";
+import { ErrorToaster } from "./components/flux-ui/common/error-toaster";
+
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
-
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
-
   return (
-    <>
-    <ButtonDemo/>
-    <ModeToggle/>
-    </>
+    <TooltipProvider delayDuration={200}>
+      <IconScale>
+        <LatticeShell />
+        {/* Subtle/professional defaults — no closeButton X (user-hidden),
+            no richColors (too vibrant). Errors still render with the
+            destructive icon via the custom `icons` map in `ui/sonner.tsx`. */}
+        <Toaster position="bottom-right" />
+        <ErrorToaster />
+      </IconScale>
+    </TooltipProvider>
   );
 }
-
-
-
-
-
-export function ButtonDemo() {
-  return (
-    <div className="flex flex-wrap items-center gap-2 md:flex-row">
-      <Button variant="outline">Button</Button>
-      <Button variant="outline" size="icon" aria-label="Submit">
-        <ArrowUpIcon />
-      </Button>
-    </div>
-  )
-}
-
 
 export default App;

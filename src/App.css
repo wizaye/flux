@@ -2,6 +2,7 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/public-sans";
+@import "./components/dotmatrix-loader.css";
 
 @custom-variant dark (&:is(.dark *));
 

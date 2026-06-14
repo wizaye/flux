@@ -17,7 +17,7 @@
         "height": 820,
         "minWidth": 720,
         "minHeight": 480,
-        "decorations": false,
+        "decorations": true,
         "transparent": false,
         "backgroundColor": "#1e1e1e",
         "dragDropEnabled": false
