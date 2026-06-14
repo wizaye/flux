@@ -17,10 +17,10 @@
         "height": 820,
         "minWidth": 720,
         "minHeight": 480,
-        "decorations": true,
+        "decorations": false,
         "transparent": false,
-        "backgroundColor": "#1e1e1e",
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "titleBarStyle":"Overlay"
       }
         
     ],

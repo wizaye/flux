@@ -2,11 +2,6 @@ import * as React from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { IcClose, IcMaximize, IcMinimize, IcRestore } from "@/components/flux-ui/common/icons";
 import {
   bgHeader,
@@ -97,18 +92,24 @@ export function WindowControls() {
         aria-hidden
         className={cn("pointer-events-none absolute left-0 right-0 bottom-0 h-px", borderTabBg)}
       />
-      <WinButton onClick={minimize} tooltip="Minimize">
-        <IcMinimize className="[width:12px] [height:12px]" strokeWidth={1.5} />
+      <WinButton onClick={minimize} >
+        <IcMinimize style={{ width: 12, height: 12 }} strokeWidth={1.5} />
       </WinButton>
-      <WinButton onClick={toggleMaximize} tooltip={isMaximized ? "Restore" : "Maximize"}>
+      <WinButton onClick={toggleMaximize} >
         {isMaximized ? (
-          <IcRestore className="[width:12px] [height:12px]" strokeWidth={1.5} />
+          <IcRestore style={{ width: 12, height: 12 }} strokeWidth={1.5} />
         ) : (
-          <IcMaximize className="[width:12px] [height:12px]" strokeWidth={1.5} />
+          /* Maximize is a hollow square — at 12px it visually outweighs
+             the 12px minimize bar and close X (filled outline reads
+             heavier than a single stroke). Drop ~2px to match. Inline
+             `style` is required because the Tailwind arbitrary class
+             `[width:Npx]` is not picked up at build time and the icon
+             defaults to `var(--icon-md)` (16px). */
+          <IcMaximize style={{ width: 10, height: 10 }} strokeWidth={1.5} />
         )}
       </WinButton>
-      <WinButton onClick={close} variant="close" tooltip="Close">
-        <IcClose className="[width:12px] [height:12px]" strokeWidth={1.5} />
+      <WinButton onClick={close} variant="close">
+        <IcClose style={{ width: 12, height: 12 }} strokeWidth={1.5} />
       </WinButton>
     </div>
   );
@@ -116,21 +117,16 @@ export function WindowControls() {
 
 function WinButton({
   onClick,
-  tooltip,
   variant,
   children,
 }: {
   onClick: () => void;
-  tooltip: string;
   variant?: "close";
   children: React.ReactNode;
 }) {
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
         <Button
           variant="ghost"
-          aria-label={tooltip}
           onClick={onClick}
           className={cn(
             "inline-flex shrink-0 items-center justify-center p-0 rounded-none border-0 bg-transparent",
@@ -149,10 +145,5 @@ function WinButton({
         >
           {children}
         </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={4}>
-        {tooltip}
-      </TooltipContent>
-    </Tooltip>
   );
 }

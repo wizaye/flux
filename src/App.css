@@ -119,6 +119,22 @@
 }
 
 @layer base {
+  /* Lock the document to the Tauri window so the shell can't be
+     scrolled / dragged to reveal blank background behind it. Default
+     browser `body { margin: 8px }` plus an unsized `<html>` / `#root`
+     would otherwise make the page itself scrollable past the
+     `h-screen w-screen` shell. `overscroll-behavior: none` kills
+     trackpad rubber-band on macOS / WebView2 elastic scroll. */
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
   * {
     @apply border-border outline-ring/50;
     }

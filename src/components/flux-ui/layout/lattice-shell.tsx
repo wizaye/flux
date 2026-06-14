@@ -24,12 +24,14 @@ import {
   RIGHT_MIN,
   SIDEBAR_ANIM_MS,
   STRIP_W,
+  WIN_CONTROLS_W,
 } from "@/lib/layout-constants";
 import { IcPanelLeft } from "@/components/flux-ui/common/icons";
 import { IconButton } from "@/components/flux-ui/common/icon-button";
 import { TerminalPalette } from "@/components/flux-ui/common/terminal-palette";
 import { SettingsDialog } from "@/components/flux-ui/modals/settings-dialog";
 import { EditorArea } from "@/components/flux-ui/editor";
+import { WindowControls } from "@/components/flux-ui/layout/window-controls";
 import {
   type SplitTree,
   type Tab,
@@ -607,8 +609,13 @@ export function LatticeShell() {
             the shell doesn't render any chrome here directly.
 
             `topLeftInsetPx` reserves space for macOS traffic-lights
-            when the L-sidebar is collapsed. Windows uses native OS
-            decorations now so we don't reserve any right-side inset. */}
+            when the L-sidebar is collapsed. `topRightInsetPx`
+            reserves WIN_CONTROLS_W (138px) on Windows/Linux when the
+            R-sidebar is collapsed so the tabbar + R-sidebar toggle
+            don't slide behind our floating WindowControls cluster.
+            pane.tsx itself gates application on `!isMac`, so on
+            macOS this value is effectively ignored and the tabbar
+            reaches the right edge. */}
         <EditorArea
           tree={tree}
           vault={MOCK_VAULT}
@@ -619,7 +626,7 @@ export function LatticeShell() {
           rightSidebarCollapsed={rightCollapsed}
           onToggleLeftSidebar={toggleLeftSidebar}
           onToggleRightSidebar={toggleRightSidebar}
-          topRightInsetPx={0}
+          topRightInsetPx={WIN_CONTROLS_W}
           topLeftInsetPx={isMac && leftCollapsed ? 40 : 0}
           isMac={isMac}
         />
@@ -640,10 +647,18 @@ export function LatticeShell() {
         }}
         aria-hidden={rightCollapsed}
       >
-        {/* Inner wrapper anchored to the RIGHT edge (which stays put
-            during the slide). */}
+        {/* Inner wrapper anchored to the LEFT edge of the column.
+            The column itself is right-side, so its right edge sits at
+            the viewport edge and its LEFT edge sweeps in/out during
+            the open/close animation. Anchoring the inner content to
+            that moving left edge makes the whole drawer (tabs, body,
+            etc.) translate horizontally with the column — a real
+            drawer slide. Anchoring it to right-0 instead (the old
+            behavior) kept content pinned to the viewport edge and
+            clipped the leftmost tabs immediately on close, leaving
+            most of the animation showing empty padding. */}
         <div
-          className="absolute top-0 right-0 h-full"
+          className="absolute top-0 left-0 h-full"
           style={{ width: rightWidth }}
         >
           <RightSidebar
@@ -654,8 +669,10 @@ export function LatticeShell() {
         </div>
         {/* Left divider — full height when expanded. z-10 so it paints
             over the inner content (which sits at left:0 of the column
-            via absolute positioning). */}
-        {!rightCollapsed && (
+            via absolute positioning). Kept rendered during the
+            collapse/expand transition so the drawer's left edge has a
+            visible border the whole way in/out. */}
+        {(!rightCollapsed || rightTransitioning) && (
           <span
             aria-hidden
             className={cn("pointer-events-none absolute left-0 top-0 bottom-0 w-px z-10", borderSoftBg)}
@@ -666,11 +683,12 @@ export function LatticeShell() {
       {/* ===== Floating status pill (bottom-right) ===== */}
       <StatusPill empty />
 
-      {/* Window controls are drawn by the OS now (`decorations: true` in
-          `tauri.conf.json`) — no custom Min/Max/Close cluster. The
-          native Windows caption sits above this shell; the macOS
-          traffic-lights overlay into the activity strip via
-          `titleBarStyle: Overlay`. */}
+      {/* Custom Win/Linux Min/Max/Close cluster (hidden on macOS).
+          Tauri runs with `decorations: false` + `titleBarStyle:
+          Overlay`, so the OS doesn't paint a title bar — we draw our
+          own buttons floating at top-right inside the WIN_CONTROLS_W
+          (138px) right-padding the right-sidebar header reserves. */}
+      <WindowControls />
 
       {/* ===== Full-window-height sidebar resize handles ===== */}
       {leftHandleX !== null && (

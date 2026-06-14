@@ -464,9 +464,14 @@ export function Pane(props: PaneProps) {
         onShowInExplorer={() => { /* stub */ }}
         onRevealInNav={() => { /* stub */ }}
         onDelete={() => activeTab && closeTab(activeTab.id)}
-        topRightInsetPx={
-          !isMac && rightSidebarCollapsed && isTopRightLeaf ? topRightInsetPx : 0
-        }
+        // The doc-header sits BELOW the 36 px-tall WindowControls
+        // cluster (which lives in the tabbar row at y: 0\u201336). So
+        // Split / Reading-view / More-options are free to slide all
+        // the way to the editor column's right edge \u2014 no inset
+        // reservation needed regardless of sidebar state. Only the
+        // tabbar row above needs `topRightInsetPx` to dodge the
+        // caption buttons.
+        topRightInsetPx={0}
         dragging={dragging}
       />
 
