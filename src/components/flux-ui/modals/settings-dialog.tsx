@@ -19,6 +19,15 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { DotmSquare3 } from "@/components/ui/dotm-square-3";
 import { cn } from "@/lib/utils";
 import {
+  useSettingsStore,
+  HOTKEY_LABELS,
+  DEFAULT_HOTKEYS,
+  bindingChips,
+  makeBinding,
+  type HotkeyId,
+  type HotkeyBinding,
+} from "@/state/settings-store";
+import {
   IcArchive,
   IcBook,
   IcBookmark,
@@ -559,43 +568,201 @@ function GeneralBody() {
   );
 }
 
+// ── Hotkey recorder ──────────────────────────────────────────────────────────
+
+/**
+ * Listens for the next keydown event and calls `onCapture` with the
+ * resulting binding. Renders a bordered capture zone that intercepts
+ * keys — Escape cancels without recording.
+ */
+function HotkeyRecorder({
+  onCapture,
+  onCancel,
+}: {
+  onCapture: (b: HotkeyBinding) => void;
+  onCancel: () => void;
+}) {
+  const ref = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    ref.current?.focus();
+    const el = ref.current;
+    if (!el) return;
+
+    const handler = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        onCancel();
+        return;
+      }
+      // Ignore bare modifier presses.
+      if (["Meta", "Control", "Shift", "Alt"].includes(e.key)) return;
+
+      onCapture(
+        makeBinding(e.key, {
+          metaKey: e.metaKey,
+          ctrlKey: e.ctrlKey,
+          shiftKey: e.shiftKey,
+          altKey: e.altKey,
+        }),
+      );
+    };
+    el.addEventListener("keydown", handler);
+    return () => el.removeEventListener("keydown", handler);
+  }, [onCapture, onCancel]);
+
+  return (
+    <div
+      ref={ref}
+      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+      tabIndex={0}
+      className={cn(
+        "inline-flex items-center justify-center h-[28px] min-w-[110px] px-3 rounded-[6px]",
+        "text-[11px] text-neutral-500 dark:text-neutral-400",
+        "border border-dashed border-[#7f6df2] bg-[#7f6df2]/5",
+        "outline-none focus:ring-1 focus:ring-[#7f6df2]/60",
+        "cursor-text select-none",
+      )}
+    >
+      Press keys…
+    </div>
+  );
+}
+
+function HotkeyRow({
+  id,
+  binding,
+  onSave,
+  onReset,
+}: {
+  id: HotkeyId;
+  binding: HotkeyBinding;
+  onSave: (b: HotkeyBinding) => void;
+  onReset: () => void;
+}) {
+  const [recording, setRecording] = React.useState(false);
+  const chips = bindingChips(binding);
+  const isDefault =
+    JSON.stringify(binding) === JSON.stringify(DEFAULT_HOTKEYS[id]);
+
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-3 py-[12px]",
+        "border-b border-neutral-200 dark:border-neutral-800 last:border-b-0",
+      )}
+    >
+      {/* Label */}
+      <span className="flex-1 text-[13px] text-neutral-900 dark:text-white">
+        {HOTKEY_LABELS[id]}
+      </span>
+
+      {/* Binding display / recorder */}
+      {recording ? (
+        <HotkeyRecorder
+          onCapture={(b) => {
+            onSave(b);
+            setRecording(false);
+          }}
+          onCancel={() => setRecording(false)}
+        />
+      ) : (
+        <button
+          type="button"
+          title="Click to change shortcut"
+          onClick={() => setRecording(true)}
+          className={cn(
+            "inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px]",
+            "border border-transparent",
+            "hover:border-neutral-300 dark:hover:border-neutral-600",
+            "hover:bg-neutral-100 dark:hover:bg-neutral-800",
+            "transition-colors duration-75 cursor-pointer",
+          )}
+        >
+          {chips.map((k) => (
+            <Kbd key={k} className="h-[20px] min-w-[20px] px-1.5 text-[10px]">
+              {k}
+            </Kbd>
+          ))}
+        </button>
+      )}
+
+      {/* Reset to default */}
+      <button
+        type="button"
+        title="Reset to default"
+        disabled={isDefault}
+        onClick={onReset}
+        className={cn(
+          "text-[11px] px-2 h-[22px] rounded-[5px]",
+          "border border-neutral-200 dark:border-neutral-700",
+          "text-neutral-500 dark:text-neutral-400",
+          "hover:bg-neutral-100 dark:hover:bg-neutral-800 hover:text-neutral-700 dark:hover:text-neutral-200",
+          "transition-colors duration-75",
+          "disabled:opacity-30 disabled:cursor-not-allowed",
+        )}
+      >
+        Reset
+      </button>
+    </div>
+  );
+}
+
 function HotkeysBody() {
-  const rows: Array<{ action: string; keys: string[] }> = [
-    { action: "Open command palette", keys: ["⌘", "K"] },
-    { action: "Toggle left sidebar", keys: ["⌘", "B"] },
-    { action: "Toggle right sidebar", keys: ["⌘", "⇧", "B"] },
-    { action: "Quick switcher", keys: ["⌘", "O"] },
-    { action: "Split right", keys: ["⌘", "\\"] },
-    { action: "Open settings", keys: ["⌘", ","] },
-  ];
+  const { hotkeys, setHotkey, resetHotkey, resetAllHotkeys } = useSettingsStore();
+  const [filter, setFilter] = React.useState("");
+
+  const ids = Object.keys(HOTKEY_LABELS) as HotkeyId[];
+  const visible = ids.filter((id) =>
+    filter === "" ||
+    HOTKEY_LABELS[id].toLowerCase().includes(filter.toLowerCase()),
+  );
+
   return (
     <div>
-      <Input
-        placeholder="Filter shortcuts…"
-        className={cn("h-8 mb-3 text-[12px] rounded-[6px]")}
-      />
+      <div className="flex items-center gap-2 mb-3">
+        <Input
+          placeholder="Filter shortcuts…"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          className={cn("h-8 flex-1 text-[12px] rounded-[6px]")}
+        />
+        <button
+          type="button"
+          onClick={resetAllHotkeys}
+          className={cn(
+            "shrink-0 h-8 px-3 rounded-[6px] text-[12px]",
+            "border border-neutral-200 dark:border-neutral-700",
+            "text-neutral-600 dark:text-neutral-400",
+            "hover:bg-neutral-100 dark:hover:bg-neutral-800",
+            "transition-colors duration-75",
+          )}
+        >
+          Reset all
+        </button>
+      </div>
+      <p className="mb-3 text-[11px] text-neutral-500 dark:text-neutral-500">
+        Click a shortcut to record a new key combination. Press{" "}
+        <Kbd className="h-[16px] min-w-[16px] px-1 text-[9px]">Esc</Kbd> to
+        cancel recording.
+      </p>
       <Section>
-        {rows.map((r, i) => (
-          <div
-            key={r.action}
-            className={cn(
-              "flex items-center justify-between gap-4 py-[12px]",
-              i < rows.length - 1 && "border-b border-border/40",
-            )}
-          >
-            <span className="text-[13px] text-neutral-900 dark:text-white">{r.action}</span>
-            <span className="inline-flex gap-1">
-              {r.keys.map((k) => (
-                <Kbd
-                  key={k}
-                  className="h-[20px] min-w-[20px] px-1.5 text-[10px]"
-                >
-                  {k}
-                </Kbd>
-              ))}
-            </span>
+        {visible.length === 0 ? (
+          <div className="py-6 text-center text-[12px] text-neutral-500">
+            No matching shortcuts.
           </div>
-        ))}
+        ) : (
+          visible.map((id) => (
+            <HotkeyRow
+              key={id}
+              id={id}
+              binding={hotkeys[id]}
+              onSave={(b) => setHotkey(id, b)}
+              onReset={() => resetHotkey(id)}
+            />
+          ))
+        )}
       </Section>
     </div>
   );

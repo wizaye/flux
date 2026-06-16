@@ -12,7 +12,6 @@ import {
   IcSourceControl,
   IcTerminal,
 } from "@/components/flux-ui/common/icons";
-
 /**
  * Vertical activity strip — body of the `lstrip` column. The column
  * wrapper (with its own `col-header` and dividers) lives in

@@ -32,6 +32,7 @@ import { TerminalPalette } from "@/components/flux-ui/common/terminal-palette";
 import { SettingsDialog } from "@/components/flux-ui/modals/settings-dialog";
 import { EditorArea } from "@/components/flux-ui/editor";
 import { WindowControls } from "@/components/flux-ui/layout/window-controls";
+import { useSettingsStore, matchesBinding } from "@/state/settings-store";
 import {
   type SplitTree,
   type Tab,
@@ -342,21 +343,21 @@ export function LatticeShell() {
   // (clear / refresh / git / sync).
   const [terminalOpen, setTerminalOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const hotkeys = useSettingsStore((s) => s.hotkeys);
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey)) {
+      if (matchesBinding(e, hotkeys.commandPalette)) {
         e.preventDefault();
         setTerminalOpen((o) => !o);
       }
-      // Cmd/Ctrl + , → open settings (mirrors VS Code / macOS conv).
-      if (e.key === "," && (e.metaKey || e.ctrlKey)) {
+      if (matchesBinding(e, hotkeys.openSettings)) {
         e.preventDefault();
         setSettingsOpen(true);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [hotkeys]);
 
   // Track viewport width so resize-handle X positions update on window
   // resize and the opposing-sidebar push math has a live value to

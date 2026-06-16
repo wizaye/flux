@@ -29,6 +29,7 @@ import {
   IcBook,
 } from "@/components/flux-ui/common/icons";
 import { useTheme } from "@/components/theme-provider";
+import { useSettingsStore, bindingLabel } from "@/state/settings-store";
 
 /**
  * Dummy global command palette built on shadcn `CommandDialog` (cmdk).
@@ -57,6 +58,7 @@ export function CommandPalette({
   handlers?: FluxCommandHandlers;
 }) {
   const { setTheme } = useTheme();
+  const hotkeys = useSettingsStore((s) => s.hotkeys);
   const run = React.useCallback(
     (fn: () => void) => {
       fn();
@@ -124,11 +126,11 @@ export function CommandPalette({
           </CommandItem>
           <CommandItem onSelect={() => run(() => handlers?.onToggleLeftSidebar?.())}>
             Toggle Left Sidebar
-            <CommandShortcut>⌘B</CommandShortcut>
+            <CommandShortcut>{bindingLabel(hotkeys.toggleLeftSidebar)}</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => run(() => handlers?.onToggleRightSidebar?.())}>
             Toggle Right Sidebar
-            <CommandShortcut>⌘⌥B</CommandShortcut>
+            <CommandShortcut>{bindingLabel(hotkeys.toggleRightSidebar)}</CommandShortcut>
           </CommandItem>
         </CommandGroup>
 
@@ -146,7 +148,7 @@ export function CommandPalette({
           </CommandItem>
           <CommandItem onSelect={() => run(() => handlers?.onOpenSettings?.())}>
             <IcGear /> Open Settings
-            <CommandShortcut>⌘,</CommandShortcut>
+            <CommandShortcut>{bindingLabel(hotkeys.openSettings)}</CommandShortcut>
           </CommandItem>
           <CommandItem onSelect={() => run(() => console.log("cmd: help"))}>
             <IcHelp /> Help & Docs
