@@ -50,6 +50,11 @@ on-demand when the user first activates that contribution point.
   "author": "someuser",
   "description": "Freeform whiteboard with laser pointer and arch stencils.",
   "minAppVersion": "0.2.0",
+  "apiVersion": "1.0",
+  "capabilities": {
+    "required": ["vault.read", "vault.write"],
+    "optional": []
+  },
   "contributes": {
     "activityBarItem": {
       "id": "excalidraw",
@@ -144,6 +149,11 @@ export type PluginSettingsPanel = {
   bundleUrl: string;
 };
 
+export type PluginCapabilities = {
+  required: string[];
+  optional?: string[];
+};
+
 export type PluginManifest = {
   id: string;
   name: string;
@@ -151,6 +161,10 @@ export type PluginManifest = {
   author: string;
   description: string;
   minAppVersion?: string;
+  /** Host SDK version this plugin targets. Checked at load time. */
+  apiVersion: string;
+  /** Fine-grained capabilities the plugin needs from the host. */
+  capabilities: PluginCapabilities;
   contributes: {
     activityBarItem?: PluginActivityBarItem;
     sidebarPanel?: PluginSidebarPanel;
@@ -235,10 +249,14 @@ export const usePluginStore = create<PluginState>()(
       settingsSections: [],
 
       loadManifests: (manifests) =>
-        set(() => {
+        set((s) => {
+          // Merge incoming manifests with persisted enabled state.
+          // Never overwrite a user's explicit enable/disable choice.
+          const enabledMap = new Map(s.plugins.map((p) => [p.id, p.enabled]));
           const plugins: InstalledPlugin[] = manifests.map(({ manifest, pluginDir }) => ({
             id: manifest.id,
-            enabled: true,
+            // Preserve persisted state; default to true only for brand-new installs.
+            enabled: enabledMap.has(manifest.id) ? enabledMap.get(manifest.id)! : true,
             version: manifest.version,
             pluginDir,
             manifest,
@@ -796,13 +814,446 @@ a registry PR review. Document this explicitly in the plugin template README.
 
 ## 16. Implementation Order
 
-1. `src/state/plugin-store.ts` — no UI deps, test in isolation.
-2. `activity-strip.tsx` — add props + plugin slot render, verify with a mock entry.
-3. `pane.tsx` `PaneBody` — registry check before kind switch, test with a mock `.testview` file.
-4. `settings-dialog.tsx` — `CommunityPluginsBody` + dynamic sections.
+**Phase 1 — Core store and manifest loading**
+1. `src/state/plugin-store.ts` — add `PluginCapabilities` + `apiVersion` to types; fix `loadManifests` merge semantics. No UI deps, test in isolation.
+2. Rust `load_plugin_manifests` command + specta export. Verify `asset://` URL resolution.
+
+**Phase 2 — UI contribution points**
+3. `activity-strip.tsx` — add props + plugin slot render, verify with a mock entry.
+4. `pane.tsx` `PaneBody` — registry check before kind switch, test with a mock `.testview` file.
 5. `left-sidebar.tsx` — plugin panel branch + lazy load.
 6. `command-palette.tsx` — merged plugin commands group.
-7. `lattice-shell.tsx` — wire `activePluginPanel` state + new props.
-8. Rust `load_plugin_manifests` command + specta export.
-9. Plugin template repo + GitHub Actions release workflow.
-10. Community registry repo + `registry.json` schema validation CI.
+7. `settings-dialog.tsx` — `CommunityPluginsBody` + dynamic sections.
+8. `lattice-shell.tsx` — wire `activePluginPanel` state + new props.
+
+**Phase 3 — Host contract platform (broker)**
+9. Define shared `PluginBackendRequest` / `PluginBackendResponse` types in a shared types file.
+10. Rust `plugin_backend_call` broker command — validation pipeline (plugin exists → `apiVersion` compat → capability granted → payload valid → route).
+11. `src-tauri/src/plugins/contracts/vault.rs` — implement `VaultApi` handlers first.
+12. `src-tauri/src/plugins/contracts/vcs.rs` — `GitApi` handlers; proves non-core features work.
+13. Frontend `plugin-sdk` package — `createPluginHost()` wrapper for plugin authors.
+14. Install/permission-prompt UX in settings — show `capabilities.required` to user before enabling.
+
+**Phase 4 — Marketplace and ecosystem**
+15. Plugin template repo + GitHub Actions release workflow.
+16. Community registry repo + `registry.json` schema validation CI.
+17. Signed artifact verification in install flow.
+
+---
+
+## 17. Host Contracts and Capability Model
+
+The plugin system should be implemented as an **app-wide host API platform**.
+Plugins do not get arbitrary access to the frontend, Tauri internals, or raw
+Rust commands. Instead, the app exposes a set of **stable contracts** and each
+contract is protected by **fine-grained capabilities** declared in the plugin
+manifest and enforced by the host.
+
+This is the right model for an open-source app with reviewed marketplace
+plugins:
+
+- The codebase is open and contributors can inspect how the host works.
+- Marketplace plugins are reviewed before publication.
+- Runtime access is still constrained so a plugin only gets the exact powers it
+  asked for and the host approved.
+
+### 17.1 Core rule
+
+Plugins may only do privileged work by calling **host contracts**. A plugin
+never calls an arbitrary Tauri command directly.
+
+Correct mental model:
+
+- plugin asks for `GitApi.pull()`
+- host checks `vcs.pull`
+- host executes the internal git implementation
+- host returns a typed result
+
+Incorrect mental model:
+
+- plugin gets general-purpose backend execution access
+- plugin calls arbitrary shell, filesystem, or Rust internals
+
+### 17.2 Contract layers
+
+The system is split into three layers:
+
+1. **Contract layer**
+   Defines the stable interfaces plugin authors program against.
+2. **Permission layer**
+   Maps contract methods to capabilities declared in `manifest.json`.
+3. **Execution layer**
+   Implements the actual behavior in host TypeScript and/or Rust.
+
+This keeps plugin authoring stable even if Flux changes its internal
+implementation details later.
+
+### 17.3 Recommended first-party contracts
+
+These contracts should exist as part of the V1 host SDK.
+
+```ts
+export interface VaultApi {
+  readText(path: string): Promise<string>;
+  writeText(path: string, content: string): Promise<void>;
+  listDir(path: string): Promise<Array<{ name: string; path: string; kind: "file" | "dir" }>>;
+}
+
+export interface WorkspaceApi {
+  openPath(path: string): Promise<void>;
+  revealInSidebar(path: string): Promise<void>;
+  showNotice(input: { title: string; message?: string; tone?: "info" | "success" | "warning" | "error" }): Promise<void>;
+}
+
+export interface GitApi {
+  status(): Promise<GitStatus>;
+  fetch(input?: { remote?: string }): Promise<void>;
+  pull(input?: { remote?: string; branch?: string }): Promise<void>;
+  push(input?: { remote?: string; branch?: string }): Promise<void>;
+  commit(input: { message: string }): Promise<{ oid: string }>;
+}
+
+export interface SearchApi {
+  query(input: { text: string; limit?: number }): Promise<SearchResult[]>;
+}
+
+export interface PluginStorageApi {
+  get(key: string): Promise<unknown>;
+  set(key: string, value: unknown): Promise<void>;
+  delete(key: string): Promise<void>;
+}
+```
+
+Notes:
+
+- `VaultApi` is for vault-scoped file operations only.
+- `GitApi` is how a community VCS plugin becomes possible without giving raw
+  backend execution.
+- `PluginStorageApi` is isolated per plugin so plugins do not share a mutable
+  global key-value store.
+- UI contribution points (`editorViews`, `sidebarPanel`, `settingsPanel`,
+  `commands`) remain separate from privileged host contracts.
+
+### 17.4 Capability naming
+
+Capabilities should be explicit, additive, and user-readable.
+
+Recommended V1 capability set:
+
+- `vault.read`
+- `vault.write`
+- `vault.list`
+- `workspace.open`
+- `workspace.notice`
+- `search.query`
+- `plugin.storage.read`
+- `plugin.storage.write`
+- `vcs.status`
+- `vcs.fetch`
+- `vcs.pull`
+- `vcs.push`
+- `vcs.commit`
+- `network.fetch`
+
+Capabilities should be checked per action, not just once at install time.
+
+### 17.5 Manifest additions
+
+Add a `capabilities` block to the plugin manifest. This should be reviewed as
+part of marketplace approval and shown to the user in the install flow.
+
+```json
+{
+  "id": "zenvault-git",
+  "name": "ZenVault Git",
+  "version": "0.1.0",
+  "apiVersion": "1.0",
+  "capabilities": {
+    "required": [
+      "vault.read",
+      "vault.write",
+      "vcs.status",
+      "vcs.pull",
+      "vcs.push",
+      "vcs.commit"
+    ],
+    "optional": [
+      "network.fetch"
+    ]
+  },
+  "contributes": {
+    "activityBarItem": {
+      "id": "git",
+      "iconUrl": "dist/icon.svg",
+      "tooltip": "Git",
+      "placement": "left"
+    },
+    "sidebarPanel": {
+      "id": "git-panel",
+      "bundleUrl": "dist/sidebar.js",
+      "placement": "left"
+    }
+  }
+}
+```
+
+Add these manifest fields in V1:
+
+- `apiVersion`: host SDK compatibility gate.
+- `capabilities.required`: install-time minimum.
+- `capabilities.optional`: may be requested later behind a prompt.
+
+### 17.6 Broker design
+
+The broker is an app-level control plane, not just a frontend helper.
+
+- TypeScript defines the plugin-facing SDK and typed request/response shapes.
+- Rust and host services enforce capability checks and run privileged actions.
+- Plugins import the SDK and never talk to internal commands directly.
+
+Suggested request contract:
+
+```ts
+export type PluginBackendRequest = {
+  pluginId: string;
+  apiVersion: string;
+  capability: string;
+  contract: string;
+  action: string;
+  payload: unknown;
+};
+
+export type PluginBackendResponse<T = unknown> =
+  | { ok: true; data: T }
+  | { ok: false; error: { code: string; message: string } };
+```
+
+Suggested Rust entrypoint:
+
+```rust
+#[tauri::command]
+#[specta::specta]
+pub async fn plugin_backend_call(
+    req: PluginBackendRequest,
+    app: tauri::AppHandle,
+) -> Result<PluginBackendResponse, AppError> {
+    // 1. Validate plugin exists and is enabled.
+    // 2. Validate apiVersion compatibility.
+    // 3. Validate capability is granted.
+    // 4. Validate payload schema for the requested action.
+    // 5. Route to the correct host service.
+    // 6. Return typed success/error response.
+}
+```
+
+### 17.7 Handler routing
+
+Internally, the broker should route to focused handler modules rather than one
+large switch statement.
+
+Suggested layout:
+
+```text
+src-tauri/src/plugins/
+├── mod.rs
+├── broker.rs
+├── permissions.rs
+├── manifest.rs
+├── contracts/
+│   ├── vault.rs
+│   ├── workspace.rs
+│   ├── search.rs
+│   └── vcs.rs
+```
+
+Each handler module should:
+
+- decode only its own payload shapes
+- enforce capability checks again if needed
+- delegate to existing app services
+- return stable contract responses
+
+### 17.8 Why this matters for real plugins
+
+This contract model is what enables plugins such as:
+
+- **Git/VCS plugin**
+  adds commit, fetch, pull, push, and history UI without making git a core
+  built-in feature for all users.
+- **Whiteboard plugin**
+  adds a rich editor view and optional sidebar/settings panels with little or
+  no privileged access.
+- **Kanban/tasks plugin**
+  adds work-item workflows for users who want them, without forcing tasks into
+  the core note-taking model.
+
+This is the product boundary: **plugins can make the app behave differently,
+but only through approved host contracts**.
+
+---
+
+## 18. Developer Template and SDK Starting Point
+
+The plugin template repo should ship with a minimal but real host SDK so plugin
+authors do not need to reverse-engineer the app internals.
+
+### 18.1 Template repo goals
+
+The template should let a developer:
+
+1. declare contributions in `manifest.json`
+2. declare required capabilities
+3. build one or more UI bundles
+4. call host contracts through a small TypeScript SDK
+5. package the plugin into a release zip
+
+### 18.2 Recommended template layout
+
+```text
+zenvault-plugin-template/
+├── manifest.json
+├── package.json
+├── tsconfig.json
+├── vite.config.ts
+├── README.md
+├── src/
+│   ├── index.ts
+│   ├── view.tsx
+│   ├── sidebar.tsx
+│   ├── settings.tsx
+│   ├── commands.ts
+│   └── plugin.ts
+├── sdk/
+│   ├── index.ts
+│   ├── types.ts
+│   ├── host.ts
+│   └── contracts/
+│       ├── vault.ts
+│       ├── workspace.ts
+│       ├── search.ts
+│       └── git.ts
+├── types/
+│   └── zenvault.d.ts
+└── .github/workflows/
+    └── release.yml
+```
+
+### 18.3 Developer-facing SDK shape
+
+The template SDK should expose a single host object that is easy to learn.
+
+```ts
+export interface PluginHost {
+  vault: VaultApi;
+  workspace: WorkspaceApi;
+  search: SearchApi;
+  git?: GitApi;
+  storage: PluginStorageApi;
+  commands: PluginCommandApi;
+}
+```
+
+The template should export a helper like:
+
+```ts
+import { createPluginHost } from "./sdk";
+
+export const host = createPluginHost({
+  pluginId: "zenvault-git",
+  apiVersion: "1.0",
+});
+```
+
+Then plugin code uses that object instead of calling transport APIs directly.
+
+```ts
+import { host } from "./plugin";
+
+export async function syncNow() {
+  await host.git?.pull({ remote: "origin", branch: "main" });
+  await host.workspace.showNotice({
+    title: "Repository updated",
+    tone: "success",
+  });
+}
+```
+
+### 18.4 Minimal SDK transport
+
+The SDK should hide the broker transport completely.
+
+```ts
+import { invoke } from "@tauri-apps/api/core";
+
+export async function callHost<T>(request: PluginBackendRequest): Promise<T> {
+  const response = await invoke<PluginBackendResponse<T>>("plugin_backend_call", {
+    req: request,
+  });
+
+  if (!response.ok) {
+    throw new Error(response.error.message);
+  }
+
+  return response.data;
+}
+```
+
+The host app may later swap this transport for a safer bridge without forcing
+plugin authors to rewrite their code, as long as the SDK contract remains
+stable.
+
+### 18.5 Template manifest example
+
+```json
+{
+  "id": "zenvault-kanban",
+  "name": "Kanban Board",
+  "version": "0.1.0",
+  "author": "community-dev",
+  "description": "Track work items in a board view without changing the core note model.",
+  "minAppVersion": "0.2.0",
+  "apiVersion": "1.0",
+  "capabilities": {
+    "required": ["vault.read", "vault.write", "workspace.open"],
+    "optional": ["search.query"]
+  },
+  "contributes": {
+    "activityBarItem": {
+      "id": "kanban",
+      "iconUrl": "dist/icon.svg",
+      "tooltip": "Kanban",
+      "placement": "left"
+    },
+    "sidebarPanel": {
+      "id": "kanban-panel",
+      "bundleUrl": "dist/sidebar.js",
+      "placement": "left"
+    },
+    "editorViews": [
+      {
+        "extensions": [".kanban.json"],
+        "bundleUrl": "dist/view.js"
+      }
+    ],
+    "settingsPanel": {
+      "label": "Kanban",
+      "bundleUrl": "dist/settings.js"
+    }
+  }
+}
+```
+
+### 18.6 Recommended implementation sequence after this spec
+
+To make plugin development real, build the platform in this order:
+
+1. define manifest `apiVersion` and `capabilities`
+2. define shared request/response types for the broker
+3. implement `plugin_backend_call` with one contract first: `VaultApi`
+4. add `PluginStorageApi` so plugin authors have isolated state immediately
+5. add `GitApi` next to prove the architecture supports non-core features
+6. publish the template repo with one example plugin, ideally a small kanban or git sidebar plugin
+
+If `GitApi` works cleanly through this platform, the architecture is doing the
+right thing: plugins are extending the product without requiring Flux core to
+own every feature itself.
