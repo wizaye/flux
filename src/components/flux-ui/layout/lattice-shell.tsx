@@ -30,17 +30,21 @@ import { IcPanelLeft } from "@/components/flux-ui/common/icons";
 import { IconButton } from "@/components/flux-ui/common/icon-button";
 import { TerminalPalette } from "@/components/flux-ui/common/terminal-palette";
 import { SettingsDialog } from "@/components/flux-ui/modals/settings-dialog";
+import { VaultPicker } from "@/components/flux-ui/modals/vault-picker";
 import { EditorArea } from "@/components/flux-ui/editor";
 import { WindowControls } from "@/components/flux-ui/layout/window-controls";
 import { useSettingsStore, matchesBinding } from "@/state/settings-store";
+import { useVaultStore } from "@/state/vault-store";
+import { useFileOperations } from "@/hooks/use-file-operations";
 import {
   type SplitTree,
   type Tab,
+  type FileNode,
   MOCK_VAULT,
-  MOCK_VAULT_TREE,
+  flattenVault,
   uid,
 } from "@/state/editor";
-import { mapLeaves, openTabInLeaf } from "@/state/editor";
+import { mapLeaves, openTabInLeaf, findLeaf } from "@/state/editor";
 
 /**
  * Top-level shell ported from `lattice/src/App.tsx`. Owns:
@@ -190,6 +194,10 @@ function leafExists(tree: SplitTree, id: string): boolean {
 
 export function LatticeShell() {
   const isMac = React.useMemo(detectIsMac, []);
+  
+  // ── Vault store ──────────────────────────────────────────────────
+  const { vaultHandle, fileTree, isVaultOpen } = useVaultStore();
+  const { openFile } = useFileOperations();
 
   // ── Persisted sidebar state ──────────────────────────────────────
   const [leftView, setLeftView] = React.useState<LeftView>(() =>
@@ -233,6 +241,17 @@ export function LatticeShell() {
     }
   }, [tree, activeLeafId]);
 
+  // Build the vault Map<id, FileNode> used by EditorArea / Pane to
+  // resolve `tab.fileId`. Real vault files come from `fileTree`
+  // (loaded from disk by useVaultOperations); when no vault is open
+  // we fall back to MOCK_VAULT so the demo content still works.
+  const vaultMap: Map<string, FileNode> = React.useMemo(() => {
+    if (isVaultOpen && fileTree.length > 0) {
+      return flattenVault(fileTree);
+    }
+    return MOCK_VAULT;
+  }, [isVaultOpen, fileTree]);
+
   const handleTreeChange = React.useCallback((next: SplitTree | null) => {
     // If the tree would collapse entirely (every leaf removed) reset
     // to a fresh single-leaf root so the editor isn't a void.
@@ -252,11 +271,38 @@ export function LatticeShell() {
    * by the LeftSidebar's file tree click handler.
    */
   const handleOpenFile = React.useCallback(
-    (fileId: string) => {
-      const node = MOCK_VAULT.get(fileId);
-      if (!node || node.kind === "folder") return;
-      const title = node.name.replace(/\.md$/i, "");
+    async (fileId: string) => {
+      // Validate fileId
+      if (!fileId) {
+        console.error('[handleOpenFile] fileId is undefined or empty');
+        return;
+      }
+      
+      // fileId is the relative path from the vault root
+      const fileName = fileId.split('/').pop() || fileId;
+      const title = fileName.replace(/\.md$/i, "");
+      
+      // Check if current active tab is empty - if so, reuse it
       setTree((cur) => {
+        const activeLeaf = findLeaf(cur, activeLeafId);
+        if (!activeLeaf) return cur;
+        
+        const activeTab = activeLeaf.tabs.find(t => t.id === activeLeaf.activeTabId);
+        
+        // If current tab is empty (no fileId), replace it
+        if (activeTab && !activeTab.fileId) {
+          const updatedTabs = activeLeaf.tabs.map(t => 
+            t.id === activeTab.id ? { ...t, fileId, title } : t
+          );
+          const next = mapLeaves(cur, (leaf) =>
+            leaf.id === activeLeafId
+              ? { ...leaf, tabs: updatedTabs }
+              : leaf,
+          );
+          return next ?? cur;
+        }
+        
+        // Otherwise, open in a new tab (or focus existing)
         const next = mapLeaves(cur, (leaf) =>
           leaf.id === activeLeafId
             ? openTabInLeaf(leaf, { id: uid("tab"), fileId, title })
@@ -264,8 +310,15 @@ export function LatticeShell() {
         );
         return next ?? cur;
       });
+      
+      // Load file content in the background (handled by useFileOperations)
+      try {
+        await openFile(fileId);
+      } catch (error) {
+        console.error("Failed to open file:", error);
+      }
     },
-    [activeLeafId],
+    [activeLeafId, openFile],
   );
 
   React.useEffect(() => {
@@ -343,6 +396,7 @@ export function LatticeShell() {
   // (clear / refresh / git / sync).
   const [terminalOpen, setTerminalOpen] = React.useState(false);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [vaultPickerOpen, setVaultPickerOpen] = React.useState(false);
   const hotkeys = useSettingsStore((s) => s.hotkeys);
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -611,9 +665,11 @@ export function LatticeShell() {
             onChangeView={setLeftView}
             onToggleSidebar={toggleLeftSidebar}
             isMac={isMac}
-            vaultName="My Vault"
+            vaultName={vaultHandle?.name || "No Vault"}
+            onOpenVaultPicker={() => setVaultPickerOpen(true)}
             onOpenSettings={() => setSettingsOpen(true)}
-            vaultTree={MOCK_VAULT_TREE}
+            onOpenHelp={() => console.log("Help not implemented yet")}
+            vaultTree={isVaultOpen ? fileTree : undefined}
             onOpenFile={handleOpenFile}
           />
         </div>
@@ -646,7 +702,7 @@ export function LatticeShell() {
             reaches the right edge. */}
         <EditorArea
           tree={tree}
-          vault={MOCK_VAULT}
+          vault={vaultMap}
           activeLeafId={activeLeafId}
           onChangeActiveLeaf={setActiveLeafId}
           onTreeChange={handleTreeChange}
@@ -751,6 +807,9 @@ export function LatticeShell() {
           Dialog. Opened from the L-sidebar footer gear, the
           terminal-palette "Open settings" entry, or Cmd/Ctrl+,. */}
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      
+      {/* Vault picker — opened from L-sidebar footer vault dropdown */}
+      <VaultPicker open={vaultPickerOpen} onClose={() => setVaultPickerOpen(false)} />
     </div>
   );
 }

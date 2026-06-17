@@ -18,8 +18,44 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# ── Tauri 2 Core ──────────────────────────────────────────────────────────
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-specta = { version = "=2.0.0-rc.20", features = ["derive", "typescript"] }
+specta = { version = "=2.0.0-rc.20", features = ["derive"] }
+
+# ── Async runtime / errors / logging ──────────────────────────────────────
+tokio = { version = "1", features = ["full"] }
+thiserror = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# ── Serialization ─────────────────────────────────────────────────────────
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# ── SQLite + FTS5 + pool ──────────────────────────────────────────────────
+rusqlite = { version = "0.31", features = ["bundled", "uuid", "chrono", "serde_json"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.24"
+rusqlite_migration = "1"
+
+# ── File watcher ──────────────────────────────────────────────────────────
+notify = "6"
+notify-debouncer-full = "0.3"
+ignore = "0.4"
+walkdir = "2"
+
+# ── IDs / hashing / time ──────────────────────────────────────────────────
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+blake3 = "1"
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio-test = "0.4"
+
 

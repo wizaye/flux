@@ -98,3 +98,70 @@
   font-size: 13px;
 }
 .pdf-error { color: #e57373; }
+
+/* ── Body split: thumbnail rail (left) + page scroller (right) ───── */
+
+.pdf-body {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
+
+.pdf-thumb-rail {
+  flex: 0 0 168px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 8px 24px 8px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-right: 1px solid var(--border-strong);
+  background: var(--bg-header);
+}
+
+.pdf-thumb-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition:
+    background-color 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+.pdf-thumb-item:hover {
+  background: var(--hover);
+  color: var(--text-normal);
+}
+.pdf-thumb-item.is-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text-normal);
+}
+
+.pdf-thumb-canvas {
+  display: block;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  border-radius: 1px;
+  /* The component sets width/height via style attributes per page;
+     this just guards against weird intrinsic sizing before the
+     render completes. */
+  max-width: 140px;
+}
+
+.pdf-thumb-label {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+

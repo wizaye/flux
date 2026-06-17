@@ -1,14 +1,44 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
+// Core modules
+pub mod commands;
+mod db;
+mod state;
+mod types;
+
+use state::AppState;
+use std::sync::Arc;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Initialize tracing subscriber for logging
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .plugin(tauri_plugin_dialog::init())
+        .manage(Arc::new(AppState::default()))
+        .invoke_handler(tauri::generate_handler![
+            // Vault commands
+            commands::vault::open_vault,
+            commands::vault::create_vault,
+            commands::vault::close_vault,
+            commands::vault::get_vault_info,
+            // File system commands
+            commands::fs::read_file,
+            commands::fs::read_file_binary,
+            commands::fs::write_file,
+            commands::fs::create_file,
+            commands::fs::delete_file,
+            commands::fs::move_file,
+            commands::fs::rename_file,
+            commands::fs::create_directory,
+            commands::fs::list_directory,
+            commands::fs::get_file_tree,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -20,55 +50,3 @@ pub fn run() {
 // These tests exercise the command logic directly without spinning up a
 // Tauri runtime.  Integration tests that need a real AppHandle live in
 // src-tauri/tests/ (added as the backend grows).
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // ── greet command ────────────────────────────────────────────────────
-
-    /// The greeting format must not change without a matching frontend
-    /// update — the webview parses this string.
-    #[test]
-    fn greet_returns_expected_format() {
-        let result = greet("World");
-        assert_eq!(result, "Hello, World! You've been greeted from Rust!");
-    }
-
-    #[test]
-    fn greet_interpolates_the_name() {
-        assert!(greet("Alice").contains("Alice"));
-        assert!(greet("Bob").contains("Bob"));
-    }
-
-    #[test]
-    fn greet_with_empty_string() {
-        let result = greet("");
-        // Should still produce a well-formed sentence even for empty input.
-        assert_eq!(result, "Hello, ! You've been greeted from Rust!");
-    }
-
-    #[test]
-    fn greet_with_unicode_name() {
-        let result = greet("日本語");
-        assert!(result.contains("日本語"));
-    }
-
-    #[test]
-    fn greet_with_special_characters() {
-        let result = greet("O'Brien & Co.");
-        assert!(result.contains("O'Brien & Co."));
-    }
-
-    // ── Greeting string structure ────────────────────────────────────────
-
-    #[test]
-    fn greet_starts_with_hello() {
-        assert!(greet("test").starts_with("Hello,"));
-    }
-
-    #[test]
-    fn greet_ends_with_exclamation() {
-        assert!(greet("test").ends_with('!'));
-    }
-}

@@ -1,6 +1,10 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 import { IconButton } from "@/components/flux-ui/common/icon-button";
+import { useFileOperations } from "@/hooks/use-file-operations";
+import { useDirectoryOperations } from "@/hooks/use-directory-operations";
+import { useVaultOperations } from "@/hooks/use-vault-operations";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -123,6 +127,50 @@ export function LeftSidebar({
   vaultTree,
   onOpenFile,
 }: LeftSidebarProps) {
+  const [inlineEdit, setInlineEdit] = React.useState<InlineEditState>(null);
+  const { createFile, renameFile } = useFileOperations();
+  const { createDirectory } = useDirectoryOperations();
+  const { refreshVault } = useVaultOperations();
+  
+  const handleInlineSubmit = React.useCallback(async (value: string) => {
+    if (!inlineEdit) return;
+    try {
+      if (inlineEdit.type === 'newFile') {
+        const newPath = inlineEdit.path ? `${inlineEdit.path}/${value}` : value;
+        await createFile(newPath, `# ${value.replace('.md', '')}\n\n`);
+        setInlineEdit(null);
+        
+        // Defer tree refresh to avoid React reconciliation issues
+        setTimeout(async () => {
+          await refreshVault();
+          // Auto-open the new file after tree refreshes
+          if (onOpenFile) {
+            setTimeout(() => onOpenFile(newPath), 50);
+          }
+        }, 100);
+      } else if (inlineEdit.type === 'newFolder') {
+        const newPath = inlineEdit.path ? `${inlineEdit.path}/${value}` : value;
+        await createDirectory(newPath);
+        setInlineEdit(null);
+        
+        // Defer tree refresh to avoid React reconciliation issues
+        setTimeout(() => refreshVault(), 100);
+      } else if (inlineEdit.type === 'rename') {
+        const oldPath = inlineEdit.path;
+        await renameFile(oldPath, value);
+        setInlineEdit(null);
+        
+        // Defer tree refresh to avoid React reconciliation issues
+        setTimeout(() => refreshVault(), 100);
+      }
+    } catch (error) {
+      console.error('Inline edit failed:', error);
+      toast.error('Operation failed', {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [inlineEdit, createFile, createDirectory, renameFile, refreshVault, onOpenFile]);
+  
   return (
     <div className={cn("flex h-full w-full flex-col", bgSidebar)}>
       <Header
@@ -131,8 +179,20 @@ export function LeftSidebar({
         onToggleSidebar={onToggleSidebar}
         isMac={isMac}
       />
-      <Toolbar view={view} />
-      <Body view={view} vaultTree={vaultTree} onOpenFile={onOpenFile} />
+      <Toolbar 
+        view={view}
+        onNewFile={() => setInlineEdit({ path: '', type: 'newFile' })}
+        onNewFolder={() => setInlineEdit({ path: '', type: 'newFolder' })}
+      />
+      <Body 
+        view={view} 
+        vaultTree={vaultTree} 
+        onOpenFile={onOpenFile}
+        inlineEdit={inlineEdit}
+        setInlineEdit={setInlineEdit}
+        onInlineSubmit={handleInlineSubmit}
+        onInlineCancel={() => setInlineEdit(null)}
+      />
       <Footer
         vaultName={vaultName}
         onOpenVaultPicker={onOpenVaultPicker}
@@ -214,34 +274,100 @@ const VIEW_TITLE: Record<LeftView, string> = {
   canvas: "Canvas",
 };
 
-function Toolbar({ view }: { view: LeftView }) {
+// ── Inline Input Component ────────────────────────────────────────
+function InlineInput({
+  defaultValue,
+  onSubmit,
+  onCancel,
+  depth,
+}: {
+  defaultValue: string;
+  onSubmit: (value: string) => void;
+  onCancel: () => void;
+  depth: number;
+}) {
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  React.useEffect(() => {
+    if (inputRef.current) {
+      inputRef.current.focus();
+      // Select filename without extension
+      const dotIndex = defaultValue.lastIndexOf('.');
+      if (dotIndex > 0) {
+        inputRef.current.setSelectionRange(0, dotIndex);
+      } else {
+        inputRef.current.select();
+      }
+    }
+  }, [defaultValue]);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      const value = inputRef.current?.value.trim();
+      if (value) onSubmit(value);
+      else onCancel();
+    } else if (e.key === 'Escape') {
+      onCancel();
+    }
+  };
+
   return (
-    <div className="flex items-center justify-start gap-1 h-[30px] px-2 shrink-0">
-      <span
-        className={cn(
-          "text-[11px] font-semibold uppercase tracking-[0.04em] select-none",
-          textMuted,
-        )}
-      >
-        {VIEW_TITLE[view]}
-      </span>
-      <span className="flex-1 min-w-0" />
-      {view === "files" && (
-        <>
-          <IconButton size="tiny" tooltip="New file"><IcNewFile /></IconButton>
-          <IconButton size="tiny" tooltip="New folder"><IcNewFolder /></IconButton>
-          <IconButton size="tiny" tooltip="Sort A → Z"><IcSortAZ /></IconButton>
-          <IconButton size="tiny" tooltip="Collapse all"><IcCollapseAll /></IconButton>
-          <IconButton size="tiny" tooltip="More options"><IcMore /></IconButton>
-        </>
-      )}
-      {view === "changes" && (
-        <>
-          <IconButton size="tiny" tooltip="Refresh"><IcRefresh /></IconButton>
-          <IconButton size="tiny" tooltip="More options"><IcMore /></IconButton>
-        </>
-      )}
+    <div
+      className="flex items-center h-6 rounded-[4px] px-2"
+      style={{ paddingLeft: depth * 14 + 8 }}
+    >
+      <input
+        ref={inputRef}
+        type="text"
+        className="flex-1 bg-transparent border-none outline-none text-[12px] text-foreground"
+        defaultValue={defaultValue}
+        onKeyDown={handleKeyDown}
+        onBlur={onCancel}
+      />
     </div>
+  );
+}
+
+export type InlineEditState = {
+  path: string;
+  type: 'newFile' | 'newFolder' | 'rename';
+} | null;
+
+function Toolbar({ view, onNewFile, onNewFolder }: { 
+  view: LeftView;
+  onNewFile: () => void;
+  onNewFolder: () => void;
+}) {
+  
+  return (
+    <>
+      <div className="flex items-center justify-start gap-1 h-[30px] px-2 shrink-0">
+        <span
+          className={cn(
+            "text-[11px] font-semibold uppercase tracking-[0.04em] select-none",
+            textMuted,
+          )}
+        >
+          {VIEW_TITLE[view]}
+        </span>
+        <span className="flex-1 min-w-0" />
+        {view === "files" && (
+          <>
+            <IconButton size="tiny" tooltip="New file" onClick={onNewFile}><IcNewFile /></IconButton>
+            <IconButton size="tiny" tooltip="New folder" onClick={onNewFolder}><IcNewFolder /></IconButton>
+            <IconButton size="tiny" tooltip="Sort A → Z"><IcSortAZ /></IconButton>
+            <IconButton size="tiny" tooltip="Collapse all"><IcCollapseAll /></IconButton>
+            <IconButton size="tiny" tooltip="More options"><IcMore /></IconButton>
+          </>
+        )}
+        {view === "changes" && (
+          <>
+            <IconButton size="tiny" tooltip="Refresh"><IcRefresh /></IconButton>
+            <IconButton size="tiny" tooltip="More options"><IcMore /></IconButton>
+          </>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -251,17 +377,33 @@ function Body({
   view,
   vaultTree,
   onOpenFile,
+  inlineEdit,
+  setInlineEdit,
+  onInlineSubmit,
+  onInlineCancel,
 }: {
   view: LeftView;
   vaultTree?: FileNode[];
   onOpenFile?: (fileId: string) => void;
+  inlineEdit?: InlineEditState;
+  setInlineEdit?: (val: InlineEditState) => void;
+  onInlineSubmit?: (value: string) => void;
+  onInlineCancel?: () => void;
 }) {
   return (
     <ScrollArea className="flex-1 min-h-0">
       <div className="flex flex-col py-0.5">
         {view === "files" && (
           vaultTree
-            ? <VaultTree nodes={vaultTree} depth={0} onOpenFile={onOpenFile} />
+            ? <VaultTree 
+                nodes={vaultTree} 
+                depth={0} 
+                onOpenFile={onOpenFile}
+                inlineEdit={inlineEdit}
+                setInlineEdit={setInlineEdit}
+                onInlineSubmit={onInlineSubmit}
+                onInlineCancel={onInlineCancel}
+              />
             : <StubList items={["Welcome.md", "Inbox.md", "Daily/", "Projects/"]} />
         )}
         {view === "search" && (
@@ -326,10 +468,18 @@ function VaultTree({
   nodes,
   depth,
   onOpenFile,
+  inlineEdit,
+  setInlineEdit,
+  onInlineSubmit,
+  onInlineCancel,
 }: {
   nodes: FileNode[];
   depth: number;
   onOpenFile?: (fileId: string) => void;
+  inlineEdit?: InlineEditState;
+  setInlineEdit?: (val: InlineEditState) => void;
+  onInlineSubmit?: (value: string) => void;
+  onInlineCancel?: () => void;
 }) {
   // Sort: folders first, then files, each alpha by name.
   const sorted = React.useMemo(
@@ -344,12 +494,25 @@ function VaultTree({
   );
   return (
     <ul className="flex flex-col gap-0.5 px-1.5 py-1">
+      {/* Inline input for new file/folder at root */}
+      {inlineEdit && inlineEdit.path === '' && onInlineSubmit && onInlineCancel && (
+        <InlineInput
+          defaultValue={inlineEdit.type === 'newFile' ? 'Untitled.md' : 'New Folder'}
+          onSubmit={onInlineSubmit}
+          onCancel={onInlineCancel}
+          depth={depth}
+        />
+      )}
       {sorted.map((node) => (
         <VaultTreeNode
           key={node.id}
           node={node}
           depth={depth}
           onOpenFile={onOpenFile}
+          inlineEdit={inlineEdit}
+          setInlineEdit={setInlineEdit}
+          onInlineSubmit={onInlineSubmit}
+          onInlineCancel={onInlineCancel}
         />
       ))}
     </ul>
@@ -360,60 +523,180 @@ function VaultTreeNode({
   node,
   depth,
   onOpenFile,
+  inlineEdit,
+  setInlineEdit,
+  onInlineSubmit,
+  onInlineCancel,
 }: {
   node: FileNode;
   depth: number;
   onOpenFile?: (fileId: string) => void;
+  inlineEdit?: InlineEditState;
+  setInlineEdit?: (val: InlineEditState) => void;
+  onInlineSubmit?: (value: string) => void;
+  onInlineCancel?: () => void;
 }) {
   const [open, setOpen] = React.useState(depth < 1);
+  const { deleteFile } = useFileOperations();
+  const { refreshVault } = useVaultOperations();
   const isFolder = node.kind === "folder";
-  // Pick an icon hint per kind. Markdown / canvas / pdf / graph all
-  // reuse the generic file glyph since we only ship IcFolder + the
-  // common file icons in this strip.
+  
+  // Check if this node is being renamed
+  const isRenaming = inlineEdit?.path === node.id && inlineEdit?.type === 'rename';
+  
   const handleClick = () => {
     if (isFolder) {
       setOpen((v) => !v);
       return;
     }
-    onOpenFile?.(node.id);
+    if (node.id) {
+      onOpenFile?.(node.id);
+    } else {
+      console.error('[VaultTreeNode] node.id is undefined:', node);
+    }
   };
+  
+  const handleRename = () => {
+    if (setInlineEdit) {
+      setInlineEdit({ path: node.id, type: 'rename' });
+    }
+  };
+  
+  const handleDelete = async () => {
+    if (!confirm(`Delete ${node.name}?`)) return;
+    try {
+      await deleteFile(node.id);
+      toast.success(`Deleted ${node.name}`);
+      
+      // Defer tree refresh to avoid React reconciliation issues
+      setTimeout(() => refreshVault(), 100);
+    } catch (error) {
+      toast.error(`Failed to delete ${node.name}`, {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+  
+  const handleCopyPath = () => {
+    navigator.clipboard.writeText(node.id);
+    toast.success("Path copied to clipboard");
+  };
+  
+  // If renaming, show inline input instead of the row
+  if (isRenaming && onInlineSubmit && onInlineCancel) {
+    return (
+      <li>
+        <InlineInput
+          defaultValue={node.name}
+          onSubmit={onInlineSubmit}
+          onCancel={onInlineCancel}
+          depth={depth + (isFolder ? 0 : 1)}
+        />
+      </li>
+    );
+  }
+  
   return (
     <li className="flex flex-col gap-0.5">
-      <button
-        type="button"
-        onClick={handleClick}
-        className={cn(
-          "flex items-center gap-1.5 h-6 rounded-[4px] text-left text-[12px] select-none cursor-pointer",
-          "px-2",
-          textNormal,
-          hoverBg,
-        )}
-        style={{ paddingLeft: 8 + depth * 12 }}
-      >
-        {isFolder ? (
-          <IcChevronDown
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <button
+            type="button"
+            onClick={handleClick}
             className={cn(
-              "[width:var(--icon-xs)] [height:var(--icon-xs)] shrink-0 transition-transform",
-              !open && "-rotate-90",
+              "flex items-center gap-1.5 h-6 rounded-[4px] text-left text-[12px] select-none cursor-pointer",
+              "px-2",
+              textNormal,
+              hoverBg,
             )}
-          />
-        ) : (
-          <span className="[width:var(--icon-xs)] [height:var(--icon-xs)] shrink-0" />
-        )}
-        <IcFolder
-          className={cn(
-            "[width:var(--icon-sm)] [height:var(--icon-sm)] shrink-0",
-            !isFolder && "opacity-60",
+            style={{ paddingLeft: 8 + depth * 12 }}
+          >
+            {isFolder ? (
+              <IcChevronDown
+                className={cn(
+                  "[width:var(--icon-xs)] [height:var(--icon-xs)] shrink-0 transition-transform",
+                  !open && "-rotate-90",
+                )}
+              />
+            ) : (
+              <span className="[width:var(--icon-xs)] [height:var(--icon-xs)] shrink-0" />
+            )}
+            <IcFolder
+              className={cn(
+                "[width:var(--icon-sm)] [height:var(--icon-sm)] shrink-0",
+                !isFolder && "opacity-60",
+              )}
+            />
+            <span className="truncate">{node.name}</span>
+          </button>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="min-w-[200px]">
+          <ContextMenuLabel className="text-[11px] uppercase tracking-wide opacity-70 truncate">
+            {node.name}
+          </ContextMenuLabel>
+          <ContextMenuSeparator />
+          {isFolder && setInlineEdit && (
+            <>
+              <ContextMenuItem onSelect={() => setInlineEdit({ path: node.id, type: 'newFile' })}>
+                <IcNewFile /> New File
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => setInlineEdit({ path: node.id, type: 'newFolder' })}>
+                <IcNewFolder /> New Folder
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
           )}
-        />
-        <span className="truncate">{node.name}</span>
-      </button>
-      {isFolder && open && node.children && (
-        <VaultTree
-          nodes={node.children}
-          depth={depth + 1}
-          onOpenFile={onOpenFile}
-        />
+          {!isFolder && (
+            <>
+              <ContextMenuItem onSelect={() => handleClick()}>
+                Open
+                <ContextMenuShortcut>↵</ContextMenuShortcut>
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
+          )}
+          <ContextMenuItem onSelect={handleCopyPath}>
+            <IcCopy /> Copy path
+            <ContextMenuShortcut>⌘⇧C</ContextMenuShortcut>
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={handleRename}>
+            <IcPencil /> Rename…
+            <ContextMenuShortcut>F2</ContextMenuShortcut>
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            variant="destructive"
+            onSelect={handleDelete}
+          >
+            <IcTrash /> Delete
+            <ContextMenuShortcut>⌫</ContextMenuShortcut>
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      {isFolder && open && (
+        <>
+          {/* Inline input for new file/folder inside this folder */}
+          {inlineEdit && inlineEdit.path === node.id && onInlineSubmit && onInlineCancel && (
+            <InlineInput
+              defaultValue={inlineEdit.type === 'newFile' ? 'Untitled.md' : 'New Folder'}
+              onSubmit={onInlineSubmit}
+              onCancel={onInlineCancel}
+              depth={depth + 1}
+            />
+          )}
+          {node.children && (
+            <VaultTree
+              nodes={node.children}
+              depth={depth + 1}
+              onOpenFile={onOpenFile}
+              inlineEdit={inlineEdit}
+              setInlineEdit={setInlineEdit}
+              onInlineSubmit={onInlineSubmit}
+              onInlineCancel={onInlineCancel}
+            />
+          )}
+        </>
       )}
     </li>
   );

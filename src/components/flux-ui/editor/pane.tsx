@@ -33,6 +33,8 @@ import { PdfView } from "./views/pdf-view";
 import { GraphView } from "./views/graph-view";
 import type { EditorViewProps, PaneActions } from "./views/types";
 import { useEditorStore } from "@/state/editor-store";
+import { useVaultStore } from "@/state/vault-store";
+import { useFileOperations } from "@/hooks/use-file-operations";
 
 /**
  * A single editor pane: tabbar (with sidebar-toggle insets) + doc-header
@@ -553,6 +555,42 @@ function PaneBody({
   onCloseTab: () => void;
   onOpenWikilink: (target: string) => void;
 }) {
+  // ── Hooks (always called, regardless of tab state) ──────────────
+  // Rules of Hooks: every hook must run on every render. Previously
+  // this function early-returned <EmptyTab/> for the no-tab case
+  // BEFORE calling its hooks, which triggered React 19's "Expected
+  // static flag was missing" internal error when tabs were swapped.
+  const fileId = tab?.fileId ?? null;
+  const isVaultOpen = useVaultStore((s) => s.isVaultOpen);
+  const loadedContent = useVaultStore((s) =>
+    fileId ? s.openFiles.get(fileId) : undefined,
+  );
+  const overrideContent = useEditorStore((s) =>
+    fileId ? s.fileContents.get(fileId) : undefined,
+  );
+  const setFileContent = useEditorStore((s) => s.setFileContent);
+  const markDirty = useEditorStore((s) => s.markDirty);
+  const markClean = useEditorStore((s) => s.markClean);
+  const { openFile, saveFile } = useFileOperations();
+
+  // Lazy-load content from disk when a real-vault file is opened in
+  // this pane and we haven't cached it yet. Mock-vault FileNodes
+  // carry `content` inline so they skip this. Binary kinds (pdf,
+  // graph) handle their own loading inside the view body — calling
+  // `read_file` on them would fail with "stream did not contain
+  // valid UTF-8".
+  const fileKind = fileId ? vault.get(fileId)?.kind : undefined;
+  const isTextKind = fileKind === "file" || fileKind === "canvas";
+  React.useEffect(() => {
+    if (!fileId) return;
+    if (!isVaultOpen) return;
+    if (!isTextKind) return;
+    if (loadedContent !== undefined) return;
+    void openFile(fileId).catch(() => {
+      /* error toast handled inside openFile */
+    });
+  }, [fileId, isVaultOpen, isTextKind, loadedContent, openFile]);
+
   if (!tab || tab.fileId == null) {
     return (
       <EmptyTab
@@ -563,10 +601,6 @@ function PaneBody({
     );
   }
   const file = vault.get(tab.fileId);
-  const overrideContent = useEditorStore((s) => s.fileContents.get(tab.fileId!));
-  const setFileContent = useEditorStore((s) => s.setFileContent);
-  const markDirty = useEditorStore((s) => s.markDirty);
-  const markClean = useEditorStore((s) => s.markClean);
 
   if (!file) {
     return (
@@ -577,8 +611,12 @@ function PaneBody({
   }
 
   // Resolve effective text-content once (used by markdown / slides /
-  // source views; pdf + graph ignore it).
-  const content = overrideContent ?? file.content ?? "";
+  // source views; pdf + graph ignore it). Priority:
+  //   1. live edits (editor-store override)
+  //   2. content loaded from disk (vault-store openFiles)
+  //   3. mock-vault inline content (FileNode.content)
+  //   4. "" while a real-vault load is in flight
+  const content = overrideContent ?? loadedContent ?? file.content ?? "";
 
   // Common bundle every view receives. Each view spreads what it
   // needs from this; unknown extras are simply ignored.
@@ -595,13 +633,22 @@ function PaneBody({
       markDirty(file.id);
     },
     onSave: () => {
-      // Mock-vault "save" — commit the in-memory override into the
-      // FileNode body and clear the dirty flag. Real-vault writes
-      // will replace this with a Tauri FS call.
-      if (overrideContent !== undefined) {
-        file.content = overrideContent;
+      const toSave = overrideContent ?? loadedContent ?? file.content ?? "";
+      if (isVaultOpen) {
+        // Real vault — persist to disk through the Tauri backend.
+        // saveFile updates vault-store.openFiles + clears dirty +
+        // toasts on error itself.
+        void saveFile(file.id, toSave)
+          .then(() => markClean(file.id))
+          .catch(() => { /* error toast handled by saveFile */ });
+      } else {
+        // Mock-vault fallback — commit override into the FileNode
+        // so reopening the tab sees the latest edits.
+        if (overrideContent !== undefined) {
+          file.content = overrideContent;
+        }
+        markClean(file.id);
       }
-      markClean(file.id);
     },
   };
 
