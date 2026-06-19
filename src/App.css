@@ -90,6 +90,12 @@
     --text-normal: #2e2e2e;
     --text-muted: #6b6b6b;
     --text-faint: #909090;
+    /* Link color used by markdown preview, wikilinks, and any other
+       "clickable inline text" surface. shadcn's --accent is a near-
+       grey hover-bg token, not a link color, so we keep --text-link
+       separate. Same hue family as --selection so they read as one
+       brand. */
+    --text-link: #6f5cf0;
     --selection: rgba(127, 109, 242, 0.20);
     --hover: rgba(0, 0, 0, 0.05);
     --bg-header: #f3f3f1;
@@ -144,10 +150,17 @@
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
 
-    /* ── Editor surface tokens (dark) ── */
-    --text-normal: #dcddde;
-    --text-muted: #8b8b8b;
-    --text-faint: #6a6a6a;
+    /* ── Editor surface tokens (dark) ──
+     * Bumped muted + faint from #8b8b8b / #6a6a6a so secondary text
+     * (H6, strikethrough, blockquote body, copy button label,
+     * sequence-diagram edge labels, table caption rows) keeps a
+     * legible AA contrast against the #1e1e1e editor surface. The
+     * previous values washed out under the page background. */
+    --text-normal: #e6e6e6;
+    --text-muted: #b3b3b3;
+    --text-faint: #7d7d7d;
+    /* Bumped luminance for dark backgrounds. */
+    --text-link: #a397ff;
     --selection: rgba(127, 109, 242, 0.35);
     --hover: rgba(255, 255, 255, 0.06);
     --bg-header: #1a1a1a;

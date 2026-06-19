@@ -8,7 +8,69 @@ use crate::state::AppState;
 use crate::types::{AppError, VaultHandle};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
+
+// ── Last-opened vault persistence ───────────────────────────────────
+//
+// We persist the last successfully opened vault path to
+// `<app_config_dir>/last-vault.txt` so the next launch can auto-reopen
+// without forcing the vault picker every time. The file is a single
+// UTF-8 path, no JSON / TOML wrapping — KISS.
+
+fn last_vault_file(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|p| p.join("last-vault.txt"))
+}
+
+fn remember_last_vault(app: &AppHandle, path: &str) {
+    let Some(file) = last_vault_file(app) else { return; };
+    if let Some(parent) = file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(&file, path) {
+        tracing::warn!("Failed to persist last-vault path: {e}");
+    }
+}
+
+fn forget_last_vault(app: &AppHandle) {
+    if let Some(file) = last_vault_file(app) {
+        let _ = std::fs::remove_file(file);
+    }
+}
+
+/// Return the path of the most-recently-opened vault, if any.
+///
+/// The frontend calls this at startup and, when it returns a path
+/// that still exists on disk, automatically reopens that vault
+/// instead of showing the vault picker.
+#[tauri::command]
+pub async fn get_last_vault_path(app: AppHandle) -> Result<Option<String>, AppError> {
+    let Some(file) = last_vault_file(&app) else {
+        return Ok(None);
+    };
+    match std::fs::read_to_string(&file) {
+        Ok(s) => {
+            let trimmed = s.trim().to_string();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else if !std::path::Path::new(&trimmed).exists() {
+                // Stale pointer — clean it up so the next launch
+                // doesn't keep trying a moved/deleted folder.
+                forget_last_vault(&app);
+                Ok(None)
+            } else {
+                Ok(Some(trimmed))
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => {
+            tracing::warn!("Failed to read last-vault file: {e}");
+            Ok(None)
+        }
+    }
+}
 
 /// Open an existing vault or create it if it doesn't exist.
 ///
@@ -21,9 +83,12 @@ use tauri::State;
 #[tauri::command]
 pub async fn open_vault(
     path: String,
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<VaultHandle, AppError> {
-    open_vault_impl(path, &state).await
+    let handle = open_vault_impl(path.clone(), &state).await?;
+    remember_last_vault(&app, &path);
+    Ok(handle)
 }
 
 /// Implementation of open_vault that can be tested.
@@ -98,9 +163,12 @@ pub(crate) async fn open_vault_impl(
 #[tauri::command]
 pub async fn create_vault(
     path: String,
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
 ) -> Result<VaultHandle, AppError> {
-    create_vault_impl(path, &state).await
+    let handle = create_vault_impl(path.clone(), &state).await?;
+    remember_last_vault(&app, &path);
+    Ok(handle)
 }
 
 async fn create_vault_impl(
@@ -122,8 +190,13 @@ async fn create_vault_impl(
 ///
 /// This stops the file watcher, closes the database pool, and clears state.
 #[tauri::command]
-pub async fn close_vault(state: State<'_, Arc<AppState>>) -> Result<(), AppError> {
-    close_vault_impl(&state).await
+pub async fn close_vault(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), AppError> {
+    close_vault_impl(&state).await?;
+    forget_last_vault(&app);
+    Ok(())
 }
 
 async fn close_vault_impl(state: &Arc<AppState>) -> Result<(), AppError> {

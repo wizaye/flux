@@ -21,7 +21,11 @@
 }
 
 .md-preview {
-  max-width: 720px;
+  /* Bumped from 720px to 960px so wide notes (tables, diagrams,
+     code blocks) get room to breathe on desktop. The reading-mode
+     `min(960px, calc(100% - 64px))` clamp keeps it from kissing
+     the pane gutter on narrow splits. */
+  max-width: min(960px, calc(100% - 64px));
   margin: 0 auto;
   padding: 32px 48px 96px;
   font-family: var(--font-text);
@@ -53,13 +57,17 @@
 .md-preview p { margin: 0.7em 0; }
 
 .md-preview a {
-  color: var(--accent);
+  /* `--text-link` is a flux-owned token (defined in App.css). We
+     deliberately don't use shadcn's `--accent` here — that token
+     is a near-grey hover-bg color (oklch(0.269 0 0) in dark mode)
+     and makes TOC links unreadable against the editor background. */
+  color: var(--text-link);
   text-decoration: none;
 }
 .md-preview a:hover { text-decoration: underline; }
 
 .md-preview .md-wikilink {
-  color: var(--accent);
+  color: var(--text-link);
   cursor: pointer;
   border-bottom: 1px dashed currentColor;
 }
@@ -70,6 +78,13 @@
   padding-left: 1.6em;
   margin: 0.5em 0;
 }
+/* Explicit list-style so the markers always render — without these
+ * declarations a global reset elsewhere (or the `:has(...)` task-list
+ * rule below) can strip the numbers/bullets. */
+.md-preview ul { list-style: disc outside; }
+.md-preview ol { list-style: decimal outside; }
+.md-preview ul ul { list-style: circle outside; }
+.md-preview ul ul ul { list-style: square outside; }
 .md-preview li {
   margin: 0.15em 0;
   padding-left: 0.15em;
@@ -92,49 +107,38 @@
 }
 .md-preview li::marker { color: var(--text-faint); }
 
+/* Task lists — `markdown-it-task-lists` emits
+ *   <li class="task-list-item"><input type="checkbox" disabled>text</li>
+ * or, for loose lists,
+ *   <li class="task-list-item"><p><input type="checkbox" disabled>text</p></li>
+ * Same markup GitHub / VS Code use. Style off the input directly so
+ * we don't depend on a custom class. */
 .md-preview .task-list-item {
-  list-style-type: none !important;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  list-style: none;
   padding-left: 0;
-  margin: 0.3em 0;
+  margin: 0.25em 0;
 }
-.md-preview .md-task-checkbox {
-  width: 14px;
-  height: 14px;
-  margin: 0;
+.md-preview .task-list-item > p { margin: 0; }
+.md-preview .task-list-item input[type="checkbox"] {
+  margin: 0 0.45em 0.18em -1.25em;
+  vertical-align: middle;
   cursor: default;
-  flex-shrink: 0;
+  accent-color: var(--text-link);
 }
-.md-preview .md-task-checkbox.md-task-inprogress {
-  appearance: none;
-  -webkit-appearance: none;
-  background-color: transparent;
-  border: 1px solid var(--border-strong);
-  border-radius: 3px;
-  position: relative;
+/* Outdent the whole task list one notch so the checkboxes sit
+ * where bullet markers normally would. */
+.md-preview ul:has(> .task-list-item) {
+  padding-left: 1.25em;
+  list-style: none;
 }
-.md-preview .md-task-checkbox.md-task-inprogress::before {
-  content: "/";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 10px;
-  font-weight: 800;
-  color: var(--accent);
-  line-height: 1;
-}
-.md-preview .task-list-item-text { flex: 1; }
 
 .md-preview blockquote {
   margin: 1em 0;
   padding: 0.4em 1.2em;
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid var(--text-link);
   color: var(--text-muted);
   font-style: italic;
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  background: color-mix(in srgb, var(--text-link) 6%, transparent);
   border-radius: 0 4px 4px 0;
 }
 
@@ -166,6 +170,115 @@
   color: var(--text-normal);
 }
 
+/* Shiki integration — Shiki emits `<pre class="shiki ..." style="background:...">`
+ * with hard-coded inline `style="background-color: ..."` for both
+ * the pre and every token. We override the pre background so our
+ * chrome stays consistent across light/dark themes while preserving
+ * Shiki's token colors. Setting `background: transparent !important`
+ * loses our chrome; instead we let the inline style win the
+ * background and just normalise padding/border to match.
+ *
+ * Dual-theme mode: when Shiki is invoked with
+ *   `themes: { light, dark }, defaultColor: false`
+ * every token span emits both `--shiki-light: #...` and
+ * `--shiki-dark: #...` CSS variables (one custom property each per
+ * span). Toggling the `.dark` class on <html> flips which variable
+ * is read — pure CSS, no JS re-highlight on theme flip. */
+.md-preview pre.shiki {
+  background: color-mix(in srgb, var(--bg-header) 70%, #000 10%) !important;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin: 1em 0;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  line-height: 1.5;
+  color: var(--shiki-light);
+}
+.md-preview pre.shiki span {
+  color: var(--shiki-light);
+}
+:root.dark .md-preview pre.shiki,
+:root.dark .md-preview pre.shiki span {
+  color: var(--shiki-dark);
+}
+:root:not(.dark) .md-preview pre.shiki {
+  background: color-mix(in srgb, var(--bg-header) 96%, #000 4%) !important;
+}
+.md-preview pre.shiki code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: 1em;
+}
+
+/* ── Copy-to-clipboard button — appears in the top-right of every
+ *    code block, fades in on hover. Click handler in
+ *    src/components/flux-ui/editor/views/markdown-preview/index.tsx
+ *    (`useEffect([html])`). ── */
+.md-preview .md-pre-with-copy {
+  position: relative;
+}
+.md-preview .md-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-family: var(--font-text);
+  font-weight: 500;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-header) 80%, transparent);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s, background-color 0.12s;
+  user-select: none;
+}
+.md-preview .md-pre-with-copy:hover .md-copy-btn,
+.md-preview .md-copy-btn:focus-visible {
+  opacity: 1;
+}
+.md-preview .md-copy-btn:hover {
+  color: var(--text-normal);
+  background: var(--bg-header);
+}
+.md-preview .md-copy-btn.is-copied {
+  opacity: 1;
+  color: var(--text-link);
+  border-color: var(--text-link);
+}
+
+/* ── Language label ── Renders in the top-left of every highlighted
+ *    code block. Driven by the `data-lang` attribute the Shiki
+ *    effect stamps onto each `<pre>` (see markdown-preview/index.tsx).
+ *    Hidden for plain / unspecified blocks because there's nothing
+ *    meaningful to show. Uses --text-muted (not --text-faint) so the
+ *    label stays legible against the slightly-darker code-block bg in
+ *    dark mode where --text-faint would wash out. */
+.md-preview .md-pre-with-copy[data-lang]::before {
+  content: attr(data-lang);
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  font-family: var(--font-text);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  user-select: none;
+  pointer-events: none;
+}
+.md-preview .md-pre-with-copy[data-lang] code {
+  /* Push the code down so the language label has room above it. */
+  display: block;
+  padding-top: 18px;
+}
+
 .md-preview hr {
   border: none;
   border-top: 1px solid var(--border-strong);
@@ -185,7 +298,7 @@
   text-align: left;
 }
 .md-preview th {
-  background: color-mix(in srgb, var(--accent) 8%, var(--bg-header));
+  background: color-mix(in srgb, var(--text-link) 10%, var(--bg-header));
   font-weight: 600;
   color: var(--text-normal);
 }
@@ -202,19 +315,60 @@
 .md-preview .mermaid-diagram { margin: 1em 0; text-align: center; }
 .md-preview .mermaid-error { color: #e57373; font-family: var(--font-mono); }
 
-/* ── KaTeX ── */
-.md-preview .katex,
-.md-preview .katex-display {
+/* ── Mermaid dual-theme swap ──
+ * Each diagram is rendered TWICE at mount — once with the light
+ * mermaid theme, once with the dark theme — wrapped in
+ * `.mermaid-light` / `.mermaid-dark` divs. The active theme is
+ * selected by the `.dark` class on <html>. Pure CSS toggle, no JS
+ * re-render on every flip — zero lag, scales to any document size.
+ * The hidden variant is `display:none` so it doesn't occupy layout
+ * space (no double-height diagrams). */
+.md-preview .mermaid-dark { display: none; }
+:root.dark .md-preview .mermaid-light { display: none; }
+:root.dark .md-preview .mermaid-dark { display: block; }
+
+/* ── MathJax 3 (SVG output) ──
+ * markdown-it-mathjax3 inlines an `<mjx-container>` per equation.
+ * Inline math is `display="inline"`; block math is `display="block"`. */
+.md-preview mjx-container {
   color: var(--text-normal);
 }
-.md-preview .katex-display {
+.md-preview mjx-container[display="block"] {
   margin: 0.9em 0;
-  padding: 0.1em 0;
   overflow-x: auto;
   overflow-y: hidden;
 }
-.md-preview .katex { line-height: 1.2; }
-.md-preview .katex-error {
-  color: #e57373;
-  border-bottom: 1px dotted #e57373;
+
+/* === File-hover-preview scoped overrides ===
+   Compact rendering for the popover. All sizes in px to avoid
+   compounding em inheritance — the .md-preview defaults assume a
+   full reading column, and even modest em multipliers blow past
+   the popover width. */
+
+.file-hover-md .markdown-preview-host {
+  overflow: visible;
 }
+.file-hover-md .md-preview {
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.file-hover-md .md-preview h1 { font-size: 14px; margin: 0.3em 0 0.25em; padding-bottom: 0.1em; }
+.file-hover-md .md-preview h2 { font-size: 13px; margin: 0.4em 0 0.2em; padding-bottom: 0.1em; }
+.file-hover-md .md-preview h3 { font-size: 12px; margin: 0.4em 0 0.15em; }
+.file-hover-md .md-preview h4,
+.file-hover-md .md-preview h5,
+.file-hover-md .md-preview h6 { font-size: 11px; margin: 0.35em 0 0.15em; }
+.file-hover-md .md-preview p { font-size: 11px; margin: 0.35em 0; }
+.file-hover-md .md-preview ul,
+.file-hover-md .md-preview ol { padding-left: 1.1em; margin: 0.3em 0; font-size: 11px; }
+.file-hover-md .md-preview li { font-size: 11px; }
+.file-hover-md .md-preview pre,
+.file-hover-md .md-preview code { font-size: 10px; }
+.file-hover-md .md-preview pre { padding: 0.4em 0.6em; margin: 0.4em 0; }
+.file-hover-md .md-preview blockquote { font-size: 11px; margin: 0.4em 0; padding: 0.2em 0.6em; }
+.file-hover-md .md-preview table { font-size: 10px; }
+.file-hover-md .md-preview img { max-width: 100%; }
+.file-hover-md .md-preview hr { margin: 0.5em 0; }

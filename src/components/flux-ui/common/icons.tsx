@@ -110,8 +110,15 @@ export const IcClose    = lc(Lucide.X);
 
 // ─── Left-rail view switchers ────────────────────────────────────────
 export const IcFolder        = lc(Lucide.Folder);
+export const IcFile          = lc(Lucide.FileText);
+export const IcFileGeneric   = lc(Lucide.File);
+export const IcFileImage     = lc(Lucide.FileImage);
+export const IcFileCode      = lc(Lucide.FileCode);
+export const IcFileJson      = lc(Lucide.FileJson);
 export const IcSearch        = lc(Lucide.Search);
 export const IcBookmark      = lc(Lucide.Bookmark);
+export const IcBookmarkPlus  = lc(Lucide.BookmarkPlus);
+export const IcFolderPlus    = lc(Lucide.FolderPlus);
 export const IcSourceControl = lc(Lucide.GitBranch);
 
 // ─── Left activity strip ─────────────────────────────────────────────
@@ -176,6 +183,7 @@ export const IcSwap   = lc(Lucide.ArrowLeftRight);
 export const IcSplit  = lc(Lucide.SplitSquareHorizontal);
 export const IcHelp   = lc(Lucide.HelpCircle);
 export const IcGear   = lc(Lucide.Settings);
+export const IcSliders = lc(Lucide.SlidersHorizontal);
 export const IcLock   = lc(Lucide.Lock);
 export const IcExpand = lc(Lucide.Maximize2);
 export const IcSun    = lc(Lucide.Sun);

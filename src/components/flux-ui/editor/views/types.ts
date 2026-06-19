@@ -51,6 +51,10 @@ export type PaneActions = {
   onSplit: (edge: "left" | "right" | "top" | "bottom") => void;
   onToggleReading: () => void;
   onSetSlides: () => void;
+  /** Switch the active tab to live-preview (CodeMirror + decorations). */
+  onSetLive: () => void;
+  /** Switch the active tab to raw-source CodeMirror. */
+  onSetSource?: () => void;
   onRename: () => void;
   onCopyPath: () => void;
   onShowInExplorer: () => void;
@@ -60,6 +64,27 @@ export type PaneActions = {
   dragging?: boolean;
   /** Extra right-padding so chrome dodges Windows caption controls. */
   topRightInsetPx?: number;
+
+  // ── Extended commands (Obsidian-parity, all optional so older
+  // call sites that haven't migrated still type-check) ──
+  onSplitRight?: () => void;
+  onSplitDown?: () => void;
+  onOpenInNewWindow?: () => void;
+  onMoveTo?: () => void;
+  onToggleBookmark?: () => void;
+  isBookmarked?: boolean;
+  onMerge?: () => void;
+  onAddProperty?: () => void;
+  onExportPdf?: () => void;
+  onFind?: () => void;
+  onReplace?: () => void;
+  onVersionHistory?: () => void;
+  onOpenLocalGraph?: () => void;
+  onOpenBacklinks?: () => void;
+  onOpenOutgoingLinks?: () => void;
+  onOpenFileProperties?: () => void;
+  onOpenOutline?: () => void;
+  onOpenInDefaultApp?: () => void;
 };
 
 /**
@@ -94,6 +119,7 @@ export const EMPTY_PANE_ACTIONS: PaneActions = {
   onSplit: () => {},
   onToggleReading: () => {},
   onSetSlides: () => {},
+  onSetLive: () => {},
   onRename: () => {},
   onCopyPath: () => {},
   onShowInExplorer: () => {},

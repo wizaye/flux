@@ -1,12 +1,18 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
+import { BookmarksList } from "@/components/flux-ui/common/bookmarks-list";
+import { VaultSearchPanel } from "@/components/flux-ui/common/vault-search-panel";
 import { IconButton } from "@/components/flux-ui/common/icon-button";
 import { useFileOperations } from "@/hooks/use-file-operations";
 import { useDirectoryOperations } from "@/hooks/use-directory-operations";
 import { useVaultOperations } from "@/hooks/use-vault-operations";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/flux-ui/common/confirm-dialog";
+import { TrashDialog } from "@/components/flux-ui/modals/trash-dialog";
+import { FileHoverPreview } from "@/components/flux-ui/common/file-hover-preview";
+import { setDragImageBelowCursor } from "@/components/flux-ui/editor/drag-ghost";
+import { formatError } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   HoverCard,
@@ -55,6 +61,12 @@ import {
   IcChevronDown,
   IcCollapseAll,
   IcCopy,
+  IcFile,
+  IcFileCode,
+  IcFileGeneric,
+  IcFileImage,
+  IcFileJson,
+  IcFilePdf,
   IcFolder,
   IcGear,
   IcHelp,
@@ -128,6 +140,7 @@ export function LeftSidebar({
   onOpenFile,
 }: LeftSidebarProps) {
   const [inlineEdit, setInlineEdit] = React.useState<InlineEditState>(null);
+  const [trashOpen, setTrashOpen] = React.useState(false);
   const { createFile, renameFile } = useFileOperations();
   const { createDirectory } = useDirectoryOperations();
   const { refreshVault } = useVaultOperations();
@@ -139,37 +152,25 @@ export function LeftSidebar({
         const newPath = inlineEdit.path ? `${inlineEdit.path}/${value}` : value;
         await createFile(newPath, `# ${value.replace('.md', '')}\n\n`);
         setInlineEdit(null);
-        
-        // Defer tree refresh to avoid React reconciliation issues
-        setTimeout(async () => {
-          await refreshVault();
-          // Auto-open the new file after tree refreshes
-          if (onOpenFile) {
-            setTimeout(() => onOpenFile(newPath), 50);
-          }
-        }, 100);
+        // The store mutator already inserted the node into the tree
+        // surgically — no refresh needed. Auto-open the new file.
+        if (onOpenFile) onOpenFile(newPath);
       } else if (inlineEdit.type === 'newFolder') {
         const newPath = inlineEdit.path ? `${inlineEdit.path}/${value}` : value;
         await createDirectory(newPath);
         setInlineEdit(null);
-        
-        // Defer tree refresh to avoid React reconciliation issues
-        setTimeout(() => refreshVault(), 100);
       } else if (inlineEdit.type === 'rename') {
         const oldPath = inlineEdit.path;
         await renameFile(oldPath, value);
         setInlineEdit(null);
-        
-        // Defer tree refresh to avoid React reconciliation issues
-        setTimeout(() => refreshVault(), 100);
       }
     } catch (error) {
       console.error('Inline edit failed:', error);
       toast.error('Operation failed', {
-        description: error instanceof Error ? error.message : String(error),
+        description: formatError(error),
       });
     }
-  }, [inlineEdit, createFile, createDirectory, renameFile, refreshVault, onOpenFile]);
+  }, [inlineEdit, createFile, createDirectory, renameFile, onOpenFile]);
   
   return (
     <div className={cn("flex h-full w-full flex-col", bgSidebar)}>
@@ -179,10 +180,12 @@ export function LeftSidebar({
         onToggleSidebar={onToggleSidebar}
         isMac={isMac}
       />
-      <Toolbar 
+      <Toolbar
         view={view}
         onNewFile={() => setInlineEdit({ path: '', type: 'newFile' })}
         onNewFolder={() => setInlineEdit({ path: '', type: 'newFolder' })}
+        onOpenTrash={() => setTrashOpen(true)}
+        onRefresh={() => { void refreshVault(); }}
       />
       <Body 
         view={view} 
@@ -199,6 +202,7 @@ export function LeftSidebar({
         onOpenSettings={onOpenSettings}
         onOpenHelp={onOpenHelp}
       />
+      <TrashDialog open={trashOpen} onOpenChange={setTrashOpen} />
     </div>
   );
 }
@@ -265,41 +269,62 @@ function Header({ view, onChangeView, onToggleSidebar, isMac }: HeaderProps) {
 
 // ─── Per-view toolbar ───────────────────────────────────────────────
 
-const VIEW_TITLE: Record<LeftView, string> = {
-  files: "Files",
-  search: "Search",
-  bookmarks: "Bookmarks",
-  changes: "Source Control",
-  calendar: "Calendar",
-  canvas: "Canvas",
-};
-
 // ── Inline Input Component ────────────────────────────────────────
 function InlineInput({
   defaultValue,
   onSubmit,
   onCancel,
   depth,
+  kind,
 }: {
   defaultValue: string;
   onSubmit: (value: string) => void;
   onCancel: () => void;
   depth: number;
+  /** Drives the leading icon + chevron slot so the input lines up
+   *  exactly with sibling rows in the tree (chevron column for
+   *  folders, spacer for files). */
+  kind: 'file' | 'folder';
 }) {
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const rootRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
-    if (inputRef.current) {
-      inputRef.current.focus();
-      // Select filename without extension
+    // Focus + select on mount.
+    const el = inputRef.current;
+    if (el) {
+      el.focus();
       const dotIndex = defaultValue.lastIndexOf('.');
       if (dotIndex > 0) {
-        inputRef.current.setSelectionRange(0, dotIndex);
+        el.setSelectionRange(0, dotIndex);
       } else {
-        inputRef.current.select();
+        el.select();
       }
     }
-  }, [defaultValue]);
+    // Click-outside cancel — registered AFTER a short delay so the
+    // very click that opened us (and any Radix tooltip / menu close
+    // cycle riding alongside it) doesn't immediately close us. We
+    // intentionally don't use onBlur because Radix's focus
+    // restoration fires a synthetic blur on the input that we can't
+    // reliably distinguish from a real "user clicked elsewhere"
+    // blur, which made the buttons appear broken.
+    let detach: (() => void) | null = null;
+    const armTimer = window.setTimeout(() => {
+      const handler = (e: MouseEvent) => {
+        const root = rootRef.current;
+        if (root && !root.contains(e.target as Node)) {
+          onCancel();
+        }
+      };
+      document.addEventListener('mousedown', handler);
+      detach = () => document.removeEventListener('mousedown', handler);
+    }, 200);
+    return () => {
+      window.clearTimeout(armTimer);
+      detach?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
@@ -311,18 +336,35 @@ function InlineInput({
     }
   };
 
+  // Mirror VaultTreeNode's row layout so the icon + text column align
+  // exactly. Folder rows show `IcChevronDown`; file rows show an
+  // invisible chevron-sized spacer. The accent ring + tinted bg
+  // signals "this row is being edited / created".
+  const Leading = kind === 'folder' ? IcFolder : pickFileIcon(defaultValue);
+
   return (
     <div
-      className="flex items-center h-6 rounded-[4px] px-2"
-      style={{ paddingLeft: depth * 14 + 8 }}
+      ref={rootRef}
+      className={cn(
+        "flex w-full min-w-0 items-center gap-1.5 h-6 px-2 rounded-[4px]",
+        "ring-1 ring-accent/70 bg-accent/[0.06]",
+      )}
+      style={{ paddingLeft: 8 + depth * 12 }}
     >
+      {kind === 'folder' ? (
+        <IcChevronDown
+          className="[width:var(--icon-xs)] [height:var(--icon-xs)] shrink-0"
+        />
+      ) : (
+        <span className="[width:var(--icon-xs)] [height:var(--icon-xs)] shrink-0" />
+      )}
+      <Leading className="[width:var(--icon-sm)] [height:var(--icon-sm)] shrink-0 opacity-80" />
       <input
         ref={inputRef}
         type="text"
-        className="flex-1 bg-transparent border-none outline-none text-[12px] text-foreground"
+        className="flex-1 min-w-0 bg-transparent border-none outline-none text-[12px] text-foreground"
         defaultValue={defaultValue}
         onKeyDown={handleKeyDown}
-        onBlur={onCancel}
       />
     </div>
   );
@@ -333,31 +375,47 @@ export type InlineEditState = {
   type: 'newFile' | 'newFolder' | 'rename';
 } | null;
 
-function Toolbar({ view, onNewFile, onNewFolder }: { 
+function Toolbar({ view, onNewFile, onNewFolder, onOpenTrash, onRefresh }: {
   view: LeftView;
   onNewFile: () => void;
   onNewFolder: () => void;
+  onOpenTrash: () => void;
+  onRefresh: () => void;
 }) {
-  
+  // Only render the 30px toolbar shell for views that put icons in
+  // it (Files, Changes). Search + Bookmarks render their own
+  // toolbar inside the Body so they can own the row — rendering
+  // an empty 30px frame here just pushes their content down and
+  // misaligns it with the Files panel.
+  if (view !== "files" && view !== "changes") return null;
   return (
     <>
-      <div className="flex items-center justify-start gap-1 h-[30px] px-2 shrink-0">
-        <span
-          className={cn(
-            "text-[11px] font-semibold uppercase tracking-[0.04em] select-none",
-            textMuted,
-          )}
-        >
-          {VIEW_TITLE[view]}
-        </span>
-        <span className="flex-1 min-w-0" />
+      {/* Icon-only toolbar, centered horizontally. The view title
+          ("Files" / "Search" / …) used to live on the left, but it
+          ate enough horizontal space that the rightmost icons would
+          overflow + get clipped at the sidebar's min width. Centering
+          icon clusters keeps them visible at every column width. */}
+      <div className="flex items-center justify-center gap-1 h-[30px] px-2 shrink-0">
         {view === "files" && (
           <>
             <IconButton size="tiny" tooltip="New file" onClick={onNewFile}><IcNewFile /></IconButton>
             <IconButton size="tiny" tooltip="New folder" onClick={onNewFolder}><IcNewFolder /></IconButton>
             <IconButton size="tiny" tooltip="Sort A → Z"><IcSortAZ /></IconButton>
             <IconButton size="tiny" tooltip="Collapse all"><IcCollapseAll /></IconButton>
-            <IconButton size="tiny" tooltip="More options"><IcMore /></IconButton>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <IconButton size="tiny" tooltip="More options"><IcMore /></IconButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[180px]">
+                <DropdownMenuItem onSelect={onRefresh}>
+                  <IcRefresh /> Refresh vault
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={onOpenTrash}>
+                  <IcTrash /> View trash…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </>
         )}
         {view === "changes" && (
@@ -391,7 +449,14 @@ function Body({
   onInlineCancel?: () => void;
 }) {
   return (
-    <ScrollArea className="flex-1 min-h-0">
+    // Force the Radix ScrollArea's internal viewport wrapper to behave
+    // as a constrained block instead of its default `display: table;
+    // min-width: 100%` — that intrinsic-min-content sizing is what
+    // makes long file names refuse to ellipsize ("truncate" never
+    // kicks in because the parent grows to fit content). The
+    // descendant arbitrary-variant targets the wrapper Radix renders
+    // inside the viewport.
+    <ScrollArea className="flex-1 min-h-0 [&>[data-slot=scroll-area-viewport]>div]:!block [&>[data-slot=scroll-area-viewport]>div]:!min-w-0 [&>[data-slot=scroll-area-viewport]>div]:!w-full">
       <div className="flex flex-col py-0.5">
         {view === "files" && (
           vaultTree
@@ -406,27 +471,8 @@ function Body({
               />
             : <StubList items={["Welcome.md", "Inbox.md", "Daily/", "Projects/"]} />
         )}
-        {view === "search" && (
-          <div className="px-2 py-1 space-y-2">
-            <Input
-              type="search"
-              placeholder="Search vault…"
-              className="h-7 text-[12px]"
-            />
-            <SidebarEmpty
-              Icon={IcSearch}
-              title="Search this vault"
-              description={<>Start typing to find notes, or press <Kbd>⌘K</Kbd> for the command palette.</>}
-            />
-          </div>
-        )}
-        {view === "bookmarks" && (
-          <SidebarEmpty
-            Icon={IcBookmark}
-            title="No bookmarks yet"
-            description="Star a file to keep it close."
-          />
-        )}
+        {view === "search" && <VaultSearchPanel />}
+        {view === "bookmarks" && <BookmarksList />}
         {view === "changes" && (
           <SidebarEmpty
             Icon={IcRefresh}
@@ -493,7 +539,17 @@ function VaultTree({
     [nodes],
   );
   return (
-    <ul className="flex flex-col gap-0.5 px-1.5 py-1">
+    // Root-level ul keeps `px-1.5 py-1` for breathing room from the
+    // toolbar; nested instances (rendered inside an open folder) get
+    // 0 padding so the parent folder row sits flush against its
+    // first child with the same 2px sibling rhythm as the rest of
+    // the tree.
+    <ul
+      className={cn(
+        "flex flex-col gap-0.5",
+        depth === 0 ? "px-1.5 py-1" : "p-0",
+      )}
+    >
       {/* Inline input for new file/folder at root */}
       {inlineEdit && inlineEdit.path === '' && onInlineSubmit && onInlineCancel && (
         <InlineInput
@@ -501,6 +557,7 @@ function VaultTree({
           onSubmit={onInlineSubmit}
           onCancel={onInlineCancel}
           depth={depth}
+          kind={inlineEdit.type === 'newFolder' ? 'folder' : 'file'}
         />
       )}
       {sorted.map((node) => (
@@ -536,14 +593,64 @@ function VaultTreeNode({
   onInlineSubmit?: (value: string) => void;
   onInlineCancel?: () => void;
 }) {
-  const [open, setOpen] = React.useState(depth < 1);
-  const { deleteFile } = useFileOperations();
-  const { refreshVault } = useVaultOperations();
+  // Folders start CLOSED. Auto-expanding the root level was
+  // confusing UX (new folders popped open immediately and the
+  // sibling rhythm broke); users can click the chevron to open one.
+  const [open, setOpen] = React.useState(false);
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const [isDropTarget, setIsDropTarget] = React.useState(false);
+  const [highlightPulse, setHighlightPulse] = React.useState(false);
+  const rowRef = React.useRef<HTMLLIElement | null>(null);
+  const { deleteFile, moveFile } = useFileOperations();
   const isFolder = node.kind === "folder";
-  
+
+  // "Reveal in navigation" listener — dispatched by the doc-header's
+  // ⋯ menu (and any other "scroll-to-this-file" trigger). Folders
+  // auto-expand if the target is a descendant; the matching leaf
+  // scrolls itself into view and pulses briefly so the user spots
+  // where the file lives in the tree.
+  React.useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ fileId?: string }>).detail;
+      const target = detail?.fileId;
+      if (!target) return;
+      // Normalise both sides so "a/b" and "a\\b" compare equal.
+      const norm = (s: string) => s.replace(/[\\/]+/g, "/");
+      const targetN = norm(target);
+      const selfN = norm(node.id);
+      if (isFolder) {
+        // Open if the target file lives under this folder.
+        if (targetN === selfN || targetN.startsWith(selfN + "/")) {
+          setOpen(true);
+        }
+        return;
+      }
+      if (selfN === targetN) {
+        // Scroll into view + pulse highlight. Two RAFs so any
+        // folder-open state changes have a chance to lay out first.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            rowRef.current?.scrollIntoView({
+              block: "center",
+              behavior: "smooth",
+            });
+            setHighlightPulse(true);
+            window.setTimeout(() => setHighlightPulse(false), 1500);
+          });
+        });
+      }
+    };
+    window.addEventListener("flux-reveal-in-nav", handler as EventListener);
+    return () =>
+      window.removeEventListener(
+        "flux-reveal-in-nav",
+        handler as EventListener,
+      );
+  }, [node.id, isFolder]);
+
   // Check if this node is being renamed
   const isRenaming = inlineEdit?.path === node.id && inlineEdit?.type === 'rename';
-  
+
   const handleClick = () => {
     if (isFolder) {
       setOpen((v) => !v);
@@ -555,33 +662,76 @@ function VaultTreeNode({
       console.error('[VaultTreeNode] node.id is undefined:', node);
     }
   };
-  
+
   const handleRename = () => {
     if (setInlineEdit) {
       setInlineEdit({ path: node.id, type: 'rename' });
     }
   };
-  
-  const handleDelete = async () => {
-    if (!confirm(`Delete ${node.name}?`)) return;
-    try {
-      await deleteFile(node.id);
-      toast.success(`Deleted ${node.name}`);
-      
-      // Defer tree refresh to avoid React reconciliation issues
-      setTimeout(() => refreshVault(), 100);
-    } catch (error) {
-      toast.error(`Failed to delete ${node.name}`, {
-        description: error instanceof Error ? error.message : String(error),
-      });
-    }
+
+  const handleDeleteConfirmed = async () => {
+    // Throws on failure — ConfirmDialog catches and keeps itself open.
+    // The store mutator inside `deleteFile` removes the node from
+    // the tree surgically; no full vault refresh required.
+    await deleteFile(node.id);
   };
-  
+
   const handleCopyPath = () => {
     navigator.clipboard.writeText(node.id);
     toast.success("Path copied to clipboard");
   };
-  
+
+  // ── Native HTML5 drag-and-drop ────────────────────────────────────
+  // Lets the user move files/folders into other folders inside the
+  // sidebar. Pure file-tree DnD (the editor panes have their OWN DnD
+  // for tab/file drops — they listen for different MIME types).
+  const handleDragStart = (e: React.DragEvent) => {
+    e.stopPropagation();
+    e.dataTransfer.setData("application/x-flux-tree-path", node.id);
+    e.dataTransfer.effectAllowed = "move";
+    // Replace the browser's washed-out element-copy ghost with a
+    // small pill (bubble) anchored below + right of the cursor's
+    // tail. Theme-aware (light/dark) — see setDragImageBelowCursor.
+    setDragImageBelowCursor(e, node.name, {
+      iconSvg: isFolder ? FOLDER_ICON_SVG : FILE_ICON_SVG,
+    });
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!isFolder) return;
+    const src = e.dataTransfer.types.includes("application/x-flux-tree-path");
+    if (!src) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (!isDropTarget) setIsDropTarget(true);
+  };
+
+  const handleDragLeave = () => {
+    if (isDropTarget) setIsDropTarget(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    if (!isFolder) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDropTarget(false);
+    const src = e.dataTransfer.getData("application/x-flux-tree-path");
+    if (!src || src === node.id) return;
+    // Don't allow dropping a folder into itself or a descendant.
+    if (node.id === src || node.id.startsWith(src + "/") || node.id.startsWith(src + "\\")) {
+      toast.error("Cannot move a folder into itself");
+      return;
+    }
+    const fileName = src.split(/[\\/]/).pop() ?? src;
+    const dst = node.id ? `${node.id}/${fileName}` : fileName;
+    try {
+      await moveFile(src, dst);
+      // `moveFile` updates the tree via `renameNodeInTree` already.
+    } catch {
+      /* useFileOperations toasts the error itself */
+    }
+  };
+
   // If renaming, show inline input instead of the row
   if (isRenaming && onInlineSubmit && onInlineCancel) {
     return (
@@ -590,46 +740,71 @@ function VaultTreeNode({
           defaultValue={node.name}
           onSubmit={onInlineSubmit}
           onCancel={onInlineCancel}
-          depth={depth + (isFolder ? 0 : 1)}
+          depth={depth}
+          kind={isFolder ? 'folder' : 'file'}
         />
       </li>
     );
   }
-  
+
+  // Pick a file icon by extension so files don't all look like folders.
+  const FileIcon = pickFileIcon(node.name);
+
   return (
-    <li className="flex flex-col gap-0.5">
+    // `gap-0.5` matches the parent `<ul>`'s sibling rhythm so an
+    // open folder's first child sits the same 2px below its row as
+    // any other sibling pair. When closed there's no second child,
+    // so the gap is a no-op.
+    <li
+      ref={rowRef}
+      className={cn(
+        "flex flex-col gap-0.5 transition-shadow",
+        highlightPulse && "ring-2 ring-[var(--text-link)] rounded-[6px]",
+      )}
+    >
       <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <button
-            type="button"
-            onClick={handleClick}
-            className={cn(
-              "flex items-center gap-1.5 h-6 rounded-[4px] text-left text-[12px] select-none cursor-pointer",
-              "px-2",
-              textNormal,
-              hoverBg,
-            )}
-            style={{ paddingLeft: 8 + depth * 12 }}
-          >
-            {isFolder ? (
-              <IcChevronDown
-                className={cn(
-                  "[width:var(--icon-xs)] [height:var(--icon-xs)] shrink-0 transition-transform",
-                  !open && "-rotate-90",
-                )}
-              />
-            ) : (
-              <span className="[width:var(--icon-xs)] [height:var(--icon-xs)] shrink-0" />
-            )}
-            <IcFolder
+        <FileHoverPreview node={node} onOpenFile={onOpenFile}>
+          <ContextMenuTrigger asChild>
+            <button
+              type="button"
+              draggable
+              onClick={handleClick}
+              onDragStart={handleDragStart}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
               className={cn(
-                "[width:var(--icon-sm)] [height:var(--icon-sm)] shrink-0",
-                !isFolder && "opacity-60",
+                "flex w-full min-w-0 items-center gap-1.5 h-6 rounded-[4px] text-left text-[12px] select-none cursor-pointer",
+                "px-2",
+                textNormal,
+                hoverBg,
+                isDropTarget && "ring-1 ring-accent bg-accent/30",
               )}
-            />
-            <span className="truncate">{node.name}</span>
-          </button>
-        </ContextMenuTrigger>
+              style={{ paddingLeft: 8 + depth * 12 }}
+            >
+              {isFolder ? (
+                <IcChevronDown
+                  className={cn(
+                    "[width:var(--icon-xs)] [height:var(--icon-xs)] shrink-0 transition-transform",
+                    !open && "-rotate-90",
+                  )}
+                />
+              ) : (
+                <span className="[width:var(--icon-xs)] [height:var(--icon-xs)] shrink-0" />
+              )}
+              {isFolder ? (
+                <IcFolder className="[width:var(--icon-sm)] [height:var(--icon-sm)] shrink-0" />
+              ) : (
+                <FileIcon className="[width:var(--icon-sm)] [height:var(--icon-sm)] shrink-0 opacity-80" />
+              )}
+              {/* No `title=` — the FileHoverPreview popover above
+                  already shows the file body, and the browser's
+                  native tooltip racing the hover card creates a
+                  double-overlay that just gets in the way. */}
+              <span className="truncate min-w-0 flex-1">{node.name}</span>
+            </button>
+          </ContextMenuTrigger>
+        </FileHoverPreview>
         <ContextMenuContent className="min-w-[200px]">
           <ContextMenuLabel className="text-[11px] uppercase tracking-wide opacity-70 truncate">
             {node.name}
@@ -667,13 +842,28 @@ function VaultTreeNode({
           <ContextMenuSeparator />
           <ContextMenuItem
             variant="destructive"
-            onSelect={handleDelete}
+            onSelect={() => setConfirmOpen(true)}
           >
             <IcTrash /> Delete
             <ContextMenuShortcut>⌫</ContextMenuShortcut>
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={isFolder ? "Delete folder?" : "Delete file?"}
+        description={
+          <>
+            <span className="font-medium">{node.name}</span> will be moved to
+            the trash. You can restore it from{" "}
+            <em>Files toolbar → ⋯ → View trash</em>.
+          </>
+        }
+        confirmLabel="Move to trash"
+        destructive
+        onConfirm={handleDeleteConfirmed}
+      />
       {isFolder && open && (
         <>
           {/* Inline input for new file/folder inside this folder */}
@@ -683,6 +873,7 @@ function VaultTreeNode({
               onSubmit={onInlineSubmit}
               onCancel={onInlineCancel}
               depth={depth + 1}
+              kind={inlineEdit.type === 'newFolder' ? 'folder' : 'file'}
             />
           )}
           {node.children && (
@@ -701,6 +892,48 @@ function VaultTreeNode({
     </li>
   );
 }
+
+/** Map a file extension to a Lucide-based icon component. Folders
+ *  use `IcFolder` directly; this only handles file kinds. */
+function pickFileIcon(name: string): React.ComponentType<React.SVGAttributes<SVGElement>> {
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".md") || lower.endsWith(".txt") || lower.endsWith(".markdown")) {
+    return IcFile;
+  }
+  if (
+    lower.endsWith(".png") ||
+    lower.endsWith(".jpg") ||
+    lower.endsWith(".jpeg") ||
+    lower.endsWith(".gif") ||
+    lower.endsWith(".webp") ||
+    lower.endsWith(".svg")
+  ) {
+    return IcFileImage;
+  }
+  if (lower.endsWith(".json")) return IcFileJson;
+  if (
+    lower.endsWith(".ts") ||
+    lower.endsWith(".tsx") ||
+    lower.endsWith(".js") ||
+    lower.endsWith(".jsx") ||
+    lower.endsWith(".rs") ||
+    lower.endsWith(".py") ||
+    lower.endsWith(".go") ||
+    lower.endsWith(".sh") ||
+    lower.endsWith(".rb")
+  ) {
+    return IcFileCode;
+  }
+  if (lower.endsWith(".pdf")) return IcFilePdf;
+  return IcFileGeneric;
+}
+
+// Raw inline SVGs for the drag-ghost bubble. `setDragImage` requires
+// a real DOM element, not React, so we can't reuse the lucide-react
+// components directly — these are the equivalent Lucide paths copied
+// verbatim. `currentColor` lets the chip recolour itself per theme.
+const FOLDER_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`;
+const FILE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>`;
 
 function StubList({ items }: { items: string[] }) {
   return (

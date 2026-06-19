@@ -28,36 +28,45 @@ export function useDragResize(
   );
 
   useEffect(() => {
-    const move = (e: PointerEvent) => {
-      if (!draggingRef.current) return;
-      const current = axis === "x" ? e.clientX : e.clientY;
-      onDelta(current - startRef.current);
-    };
-    const up = () => {
+    const cleanup = () => {
       if (!draggingRef.current) return;
       draggingRef.current = false;
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       onEnd?.();
     };
+    const move = (e: PointerEvent) => {
+      if (!draggingRef.current) return;
+      const current = axis === "x" ? e.clientX : e.clientY;
+      onDelta(current - startRef.current);
+    };
     // Safety nets — webviews occasionally swallow pointerup when the
     // cursor strays over the OS title bar / another window / the dev
     // overlay, leaving `body.cursor` stuck on `col-resize` and the
     // entire editor area showing the splitter cursor. Treat blur,
     // tab-hide and Escape as "drag is over, clean up".
-    const onVisibility = () => { if (document.hidden) up(); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") up(); };
+    const onVisibility = () => { if (document.hidden) cleanup(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") cleanup(); };
     window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("pointercancel", up);
-    window.addEventListener("blur", up);
+    window.addEventListener("pointerup", cleanup);
+    window.addEventListener("pointercancel", cleanup);
+    window.addEventListener("blur", cleanup);
     window.addEventListener("keydown", onKey);
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
+      // CRITICAL: if the handle component unmounts mid-drag (this
+      // happens when dragging the sidebar PAST the collapse
+      // threshold — the parent stops rendering the handle the
+      // instant `leftCollapsed` flips true), tear down the in-flight
+      // drag synchronously here. Otherwise body.cursor stays stuck
+      // on "col-resize" forever, and the next time the user reveals
+      // the sidebar they can't grab the splitter because the OS
+      // cursor never returned to "default".
+      cleanup();
       window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("pointercancel", up);
-      window.removeEventListener("blur", up);
+      window.removeEventListener("pointerup", cleanup);
+      window.removeEventListener("pointercancel", cleanup);
+      window.removeEventListener("blur", cleanup);
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("visibilitychange", onVisibility);
     };

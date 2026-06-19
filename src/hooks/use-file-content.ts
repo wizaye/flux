@@ -9,15 +9,16 @@ import { useCallback } from 'react';
 import { useVaultStore } from '@/state/vault-store';
 import { toast } from 'sonner';
 import * as backend from '@/bindings';
+import { formatError } from '@/lib/errors';
 
 export function useFileContent() {
-  const {
-    openFiles,
-    dirtyFiles,
-    setFileContent,
-    markDirty,
-    markClean,
-  } = useVaultStore();
+  // Selectors — see use-file-operations.ts for the rationale (avoid
+  // re-rendering on every unrelated vault-store mutation).
+  const openFiles = useVaultStore((s) => s.openFiles);
+  const dirtyFiles = useVaultStore((s) => s.dirtyFiles);
+  const setFileContent = useVaultStore((s) => s.setFileContent);
+  const markDirty = useVaultStore((s) => s.markDirty);
+  const markClean = useVaultStore((s) => s.markClean);
   
   /**
    * Get file content from memory cache.
@@ -108,7 +109,7 @@ export function useFileContent() {
       toast.info(`Discarded changes: ${path}`);
     } catch (error) {
       toast.error(`Failed to reload file: ${path}`, {
-        description: error instanceof Error ? error.message : String(error),
+        description: formatError(error),
       });
       throw error;
     }

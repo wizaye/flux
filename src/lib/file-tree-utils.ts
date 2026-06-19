@@ -15,7 +15,7 @@ import type { FileNode } from '@/state/editor/types';
  * (which only works for UTF-8 content) vs leave loading to the
  * specialized view (PDFs fetch bytes via `read_file_binary`).
  */
-function kindForFile(name: string): FileNode['kind'] {
+export function kindForFile(name: string): FileNode['kind'] {
   const lower = name.toLowerCase();
   if (lower.endsWith('.pdf')) return 'pdf';
   if (lower.endsWith('.canvas')) return 'canvas';

@@ -38,7 +38,7 @@ export type Tab = {
   /** id of the file in the vault, or null for an empty "New tab". */
   fileId: string | null;
   title: string;
-  viewMode?: "source" | "preview" | "slides";
+  viewMode?: "source" | "live" | "preview" | "slides";
   isPinned?: boolean;
 };
 

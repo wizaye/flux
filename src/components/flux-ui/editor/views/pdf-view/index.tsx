@@ -145,17 +145,7 @@ export function PdfView(props: import("../types").EditorViewProps) {
       header={
         <PaneDocHeader
           tab={tab}
-          onSplit={paneActions.onSplit}
-          // PDF has no source/preview toggle — pass the noop through
-          // anyway so the header signature stays uniform. The DocMoreMenu
-          // hides the toggle item when `viewMode` is undefined.
-          onToggleReading={paneActions.onToggleReading}
-          onSetSlides={paneActions.onSetSlides}
-          onRename={paneActions.onRename}
-          onCopyPath={paneActions.onCopyPath}
-          onShowInExplorer={paneActions.onShowInExplorer}
-          onRevealInNav={paneActions.onRevealInNav}
-          onDelete={paneActions.onDelete}
+          {...paneActions}
           topRightInsetPx={paneActions.topRightInsetPx ?? 0}
           dragging={paneActions.dragging ?? false}
         />

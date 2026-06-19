@@ -98,30 +98,28 @@ impl FileRecord {
     }
 
     /// Update file state (active/archived/trashed).
+    ///
+    /// No-op when the path isn't indexed yet (the file may exist on
+    /// disk without a row — e.g. files discovered by the vault
+    /// scanner but never touched by `write_file`). The filesystem is
+    /// the source of truth; the DB is just a derived index.
     pub fn update_state(conn: &Connection, path: &str, state: FileState) -> Result<()> {
-        let updated = conn.execute(
+        conn.execute(
             "UPDATE files SET state = ?1 WHERE relative_path = ?2",
             params![state.as_str(), path],
         )?;
-
-        if updated == 0 {
-            anyhow::bail!("File not found: {}", path);
-        }
-
         Ok(())
     }
 
     /// Update file path (for rename/move operations).
+    ///
+    /// No-op when the path isn't indexed yet (same rationale as
+    /// `update_state`).
     pub fn update_path(conn: &Connection, old_path: &str, new_path: &str) -> Result<()> {
-        let updated = conn.execute(
+        conn.execute(
             "UPDATE files SET relative_path = ?1 WHERE relative_path = ?2",
             params![new_path, old_path],
         )?;
-
-        if updated == 0 {
-            anyhow::bail!("File not found: {}", old_path);
-        }
-
         Ok(())
     }
 

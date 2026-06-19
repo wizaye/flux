@@ -39,25 +39,6 @@ function getSystemTheme(): ResolvedTheme {
   return "light"
 }
 
-function disableTransitionsTemporarily() {
-  const style = document.createElement("style")
-  style.appendChild(
-    document.createTextNode(
-      "*,*::before,*::after{-webkit-transition:none!important;transition:none!important}"
-    )
-  )
-  document.head.appendChild(style)
-
-  return () => {
-    window.getComputedStyle(document.body)
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        style.remove()
-      })
-    })
-  }
-}
-
 function isEditableTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) {
     return false
@@ -106,16 +87,15 @@ export function ThemeProvider({
       const root = document.documentElement
       const resolvedTheme =
         nextTheme === "system" ? getSystemTheme() : nextTheme
-      const restoreTransitions = disableTransitionOnChange
-        ? disableTransitionsTemporarily()
-        : null
-
+      // Plain classList toggle — no transition-disable hack. The
+      // previous implementation injected a global style tag and
+      // forced a synchronous layout via getComputedStyle + double
+      // rAF cleanup, which was the perceptible stutter on every
+      // theme flip. Our lattice tokens don't animate colour
+      // transitions, so nothing needs to be suppressed.
+      void disableTransitionOnChange
       root.classList.remove("light", "dark")
       root.classList.add(resolvedTheme)
-
-      if (restoreTransitions) {
-        restoreTransitions()
-      }
     },
     [disableTransitionOnChange]
   )

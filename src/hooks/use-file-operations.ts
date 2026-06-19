@@ -1,159 +1,184 @@
 /**
  * File operations hook — handles file CRUD operations.
- * 
+ *
  * Use case: Reading, writing, creating, deleting, moving, renaming files.
  * Used by: Editor, file tree context menus, command palette.
+ *
+ * IMPORTANT: callbacks here are kept STABLE across renders. We don't
+ * subscribe to `openFiles` (which mutates on every save / cache
+ * write); when we need the latest map we pull it from
+ * `useVaultStore.getState()` inside the callback. Same goes for the
+ * tree mutators. This stops the hook from churning new callback
+ * references through the component tree on every keystroke / save,
+ * which used to make the app feel laggy after the vault grew.
  */
 
 import { useCallback } from 'react';
 import { useVaultStore } from '@/state/vault-store';
+import { getTabSyncHandlers } from '@/state/tab-sync-store';
+import { useEditorStore } from '@/state/editor-store';
+import { formatError } from '@/lib/errors';
 import { toast } from 'sonner';
 import * as backend from '@/bindings';
 
 export function useFileOperations() {
-  const {
-    openFiles,
-    setFileContent,
-    removeFileContent,
-    markClean,
-  } = useVaultStore();
-  
   /**
    * Open/read a file (loads from backend if not cached).
    */
   const openFile = useCallback(async (path: string) => {
-    // Return cached content if available
-    if (openFiles.has(path)) {
-      return openFiles.get(path)!;
+    const store = useVaultStore.getState();
+    if (store.openFiles.has(path)) {
+      return store.openFiles.get(path)!;
     }
-    
     try {
       const content = await backend.readFile(path);
-      setFileContent(path, content);
+      useVaultStore.getState().setFileContent(path, content);
       return content;
     } catch (error) {
       toast.error(`Failed to open file: ${path}`, {
-        description: error instanceof Error ? error.message : String(error),
+        description: formatError(error),
       });
       throw error;
     }
-  }, [openFiles, setFileContent]);
-  
+  }, []);
+
   /**
    * Save a file to disk.
    */
   const saveFile = useCallback(async (path: string, content: string) => {
     try {
       await backend.writeFile(path, content);
-      setFileContent(path, content);
-      markClean(path);
+      const store = useVaultStore.getState();
+      store.setFileContent(path, content);
+      store.markClean(path);
       toast.success(`Saved: ${path}`);
     } catch (error) {
       toast.error(`Failed to save file: ${path}`, {
-        description: error instanceof Error ? error.message : String(error),
+        description: formatError(error),
       });
       throw error;
     }
-  }, [setFileContent, markClean]);
-  
+  }, []);
+
   /**
    * Create a new file with initial content.
    */
   const createFile = useCallback(async (path: string, content = '') => {
     try {
-      // Create file with content on disk
       await backend.createFile(path, content);
-      
-      // Also cache the content immediately so it's available when opened
-      if (content) {
-        setFileContent(path, content);
-      }
-      
+      const store = useVaultStore.getState();
+      if (content) store.setFileContent(path, content);
+      store.addNodeToTree(path, 'file');
       toast.success(`Created file: ${path}`);
     } catch (error) {
       toast.error(`Failed to create file: ${path}`, {
-        description: error instanceof Error ? error.message : String(error),
+        description: formatError(error),
       });
       throw error;
     }
-  }, [setFileContent]);
-  
+  }, []);
+
   /**
-   * Delete a file (moves to trash).
+   * Delete a file (moves to trash). Also closes any open tabs
+   * pointing at it and drops the cached body so the editor doesn't
+   * show "file not found" for a now-gone path.
    */
   const deleteFile = useCallback(async (path: string) => {
     try {
       await backend.deleteFile(path);
-      
-      // Remove from cache
-      removeFileContent(path);
-      markClean(path);
-      
+      getTabSyncHandlers()?.closeTabsForFile(path);
+      const store = useVaultStore.getState();
+      store.removeFileContent(path);
+      store.markClean(path);
+      useEditorStore.getState().markClean(path);
+      store.removeNodeFromTree(path);
       toast.success(`Moved to trash: ${path}`);
     } catch (error) {
-      toast.error(`Failed to delete file: ${path}`, {
-        description: error instanceof Error ? error.message : String(error),
+      toast.error(`Failed to delete file`, {
+        description: formatError(error),
       });
       throw error;
     }
-  }, [removeFileContent, markClean]);
-  
+  }, []);
+
   /**
-   * Move a file to a new location.
+   * Move a file to a new location. Updates open tabs to track the
+   * new path so the editor doesn't end up holding a dangling ref.
    */
   const moveFile = useCallback(async (src: string, dst: string) => {
     try {
       const result = await backend.moveFile(src, dst);
-      
-      // Update cache (move content from src to dst)
-      const content = openFiles.get(src);
-      if (content) {
-        removeFileContent(src);
-        setFileContent(dst, content);
+
+      const store = useVaultStore.getState();
+      const content = store.openFiles.get(src);
+      if (content !== undefined) {
+        store.removeFileContent(src);
+        store.setFileContent(result.newPath, content);
       }
-      
-      const healedMsg = result.links_healed > 0
-        ? ` (${result.links_healed} links healed)`
+
+      const newName = result.newPath.split(/[\\/]/).pop() ?? result.newPath;
+      getTabSyncHandlers()?.renameTabFile(
+        src,
+        result.newPath,
+        newName.replace(/\.md$/i, ''),
+      );
+      store.renameNodeInTree(src, result.newPath);
+
+      const healedMsg = result.linksHealed > 0
+        ? ` (${result.linksHealed} links healed)`
         : '';
       toast.success(`Moved: ${src} → ${dst}${healedMsg}`);
-      
+
       return result;
     } catch (error) {
-      toast.error(`Failed to move file: ${src}`, {
-        description: error instanceof Error ? error.message : String(error),
+      toast.error(`Failed to move file`, {
+        description: formatError(error),
       });
       throw error;
     }
-  }, [openFiles, removeFileContent, setFileContent]);
-  
+  }, []);
+
   /**
-   * Rename a file.
+   * Rename a file. Updates open tabs so the editor follows the
+   * rename instead of saying "file not found".
    */
   const renameFile = useCallback(async (path: string, newName: string) => {
     try {
       const result = await backend.renameFile(path, newName);
-      
-      // Update cache (move content to new path)
-      const content = openFiles.get(path);
-      if (content) {
-        removeFileContent(path);
-        setFileContent(result.new_path, content);
+
+      const store = useVaultStore.getState();
+      const content = store.openFiles.get(path);
+      if (content !== undefined) {
+        store.removeFileContent(path);
+        store.setFileContent(result.newPath, content);
       }
-      
-      const healedMsg = result.links_healed > 0
-        ? ` (${result.links_healed} links healed)`
+
+      const displayName = newName.replace(/\.md$/i, '');
+      getTabSyncHandlers()?.renameTabFile(path, result.newPath, displayName);
+      store.renameNodeInTree(path, result.newPath);
+      // Keep bookmarks in sync — pointing at the OLD path would 404
+      // until the user re-bookmarks.
+      try {
+        const { useBookmarksStore } = await import("@/state/bookmarks-store");
+        useBookmarksStore.getState().rename(path, result.newPath);
+      } catch {
+        /* bookmarks store optional — ignore if not loaded */
+      }
+
+      const healedMsg = result.linksHealed > 0
+        ? ` (${result.linksHealed} links healed)`
         : '';
       toast.success(`Renamed: ${path} → ${newName}${healedMsg}`);
-      
+
       return result;
     } catch (error) {
-      toast.error(`Failed to rename file: ${path}`, {
-        description: error instanceof Error ? error.message : String(error),
+      toast.error(`Failed to rename file`, {
+        description: formatError(error),
       });
       throw error;
     }
-  }, [openFiles, removeFileContent, setFileContent]);
-  
+  }, []);
+
   return {
     openFile,
     saveFile,

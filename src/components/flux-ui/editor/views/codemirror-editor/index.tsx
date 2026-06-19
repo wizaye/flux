@@ -6,7 +6,7 @@ import {
   StateField,
   Transaction,
 } from "@codemirror/state";
-import { openSearchPanel, search, searchKeymap } from "@codemirror/search";
+import { search, searchKeymap } from "@codemirror/search";
 import {
   EditorView,
   keymap,
@@ -29,7 +29,7 @@ import {
   indentWithTab,
 } from "@codemirror/commands";
 import type { Command } from "@codemirror/view";
-import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
+import { markdown, markdownLanguage, insertNewlineContinueMarkup, deleteMarkupBackward } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import {
   syntaxHighlighting,
@@ -48,6 +48,7 @@ import { useEditorStore } from "@/state/editor-store";
 import { useSettingsStore } from "@/state/settings-store";
 import type { FileNode } from "@/state/editor";
 import { vimMode as makeVimExtension } from "../../extensions/cm-vim";
+import { livePreviewExtension, livePreviewStyles } from "../../extensions/live-preview";
 import { EMPTY_PANE_ACTIONS } from "../types";
 import { PaneDocHeader } from "../../pane-doc-header";
 import { EditorPaneLayout } from "../editor-pane-layout";
@@ -186,7 +187,7 @@ const markdownHighlight = HighlightStyle.define([
     fontFamily: "var(--font-mono)",
     color: "var(--syn-mono)",
   },
-  { tag: t.url, color: "var(--accent)" },
+  { tag: t.url, color: "var(--text-link)" },
   { tag: t.quote, color: "var(--text-muted)", fontStyle: "italic" },
   { tag: t.processingInstruction, color: "var(--text-faint)" },
   { tag: t.contentSeparator, color: "var(--text-muted)" },
@@ -241,7 +242,7 @@ const wikilinkPlugin = ViewPlugin.fromClass(
 
 const wikilinkStyle = EditorView.baseTheme({
   ".cm-wikilink": {
-    color: "var(--accent)",
+    color: "var(--text-link)",
     cursor: "pointer",
     textDecoration: "underline",
     textDecorationColor: "transparent",
@@ -251,7 +252,7 @@ const wikilinkStyle = EditorView.baseTheme({
   },
   ".cm-wikilink:hover": {
     backgroundColor: "var(--hover)",
-    textDecorationColor: "var(--accent)",
+    textDecorationColor: "var(--text-link)",
   },
 });
 
@@ -457,6 +458,14 @@ type Props = {
   vault?: Map<string, FileNode>;
   /** Click handler for `[[wikilink]]` matches — passed the link target name. */
   onOpenWikilink?: (target: string) => void;
+  /**
+   * Enable the Obsidian-style live-preview extension stack: replaces
+   * markdown markup on lines the cursor isn't on with rendered
+   * widgets (bold/italic stripped, links rendered, images inlined,
+   * task checkboxes interactive, headings scaled). Pure additive —
+   * disabling it falls back to the raw source view.
+   */
+  livePreview?: boolean;
 };
 
 /**
@@ -465,22 +474,15 @@ type Props = {
  * in markdown-preview / slides-view / pdf-view — see
  * ../editor-pane-layout.tsx for the design rationale.
  */
-export function CodeMirrorEditor(props: import("../types").EditorViewProps) {
+export function CodeMirrorEditor(props: import("../types").EditorViewProps & { livePreview?: boolean }) {
   // Default guard — see markdown-preview/index.tsx for rationale.
-  const { tab, file, content, vault, paneActions = EMPTY_PANE_ACTIONS, onChange, onSave, onOpenWikilink } = props;
+  const { tab, file, content, vault, paneActions = EMPTY_PANE_ACTIONS, onChange, onSave, onOpenWikilink, livePreview } = props;
   return (
     <EditorPaneLayout
       header={
         <PaneDocHeader
           tab={tab}
-          onSplit={paneActions.onSplit}
-          onToggleReading={paneActions.onToggleReading}
-          onSetSlides={paneActions.onSetSlides}
-          onRename={paneActions.onRename}
-          onCopyPath={paneActions.onCopyPath}
-          onShowInExplorer={paneActions.onShowInExplorer}
-          onRevealInNav={paneActions.onRevealInNav}
-          onDelete={paneActions.onDelete}
+          {...paneActions}
           topRightInsetPx={paneActions.topRightInsetPx ?? 0}
           dragging={paneActions.dragging ?? false}
         />
@@ -493,6 +495,7 @@ export function CodeMirrorEditor(props: import("../types").EditorViewProps) {
         onSave={onSave ?? (() => undefined)}
         vault={vault}
         onOpenWikilink={onOpenWikilink}
+        livePreview={livePreview}
       />
     </EditorPaneLayout>
   );
@@ -505,6 +508,7 @@ function CodeMirrorEditorBody({
   onSave,
   vault,
   onOpenWikilink,
+  livePreview,
 }: Props) {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -570,9 +574,24 @@ function CodeMirrorEditorBody({
           ...closeBracketsKeymap,
           { key: "Tab", run: indentListLine },
           { key: "Shift-Tab", run: dedentListLine },
+          // Enter inside a list continues the markup (next bullet,
+          // next numbered item, or exits the list on a blank item).
+          // Backspace at the start of a list line deletes one level
+          // of markup instead of the bare character. Same behaviour
+          // VS Code / Obsidian / GitHub use; without it, pressing
+          // Enter just inserts a blank line and markdown-it then
+          // can't see the resulting `2. foo` line as a list because
+          // CommonMark requires either a `1.` start or no preceding
+          // paragraph for an ordered list to interrupt text.
+          { key: "Enter", run: insertNewlineContinueMarkup },
+          { key: "Backspace", run: deleteMarkupBackward },
           ...defaultKeymap,
           ...historyKeymap,
-          ...searchKeymap,
+          // Filter out CM's Mod-f / Mod-h bindings so they bubble to
+          // the window-level handler that routes Find/Replace to the
+          // global left-sidebar search panel (VS Code style). All
+          // OTHER search bindings (F3, Mod-g, etc.) are preserved.
+          ...searchKeymap.filter((b) => b.key !== "Mod-f" && b.key !== "Mod-h"),
           indentWithTab,
           {
             key: "Mod-s",
@@ -590,6 +609,11 @@ function CodeMirrorEditorBody({
         listHangingIndent,
         flashLineField,
         flashLineTheme,
+        // Live-preview decorations are appended LAST so they win
+        // visual-precedence over the raw wikilink / syntax styling
+        // for the same ranges. The extension is a no-op when not
+        // mounted, so opting out is just "don't include it".
+        ...(livePreview ? [livePreviewExtension, livePreviewStyles] : []),
         search({ top: false }),
         ...makeVimExtension(vimEnabled),
         autocompletion({
@@ -613,9 +637,15 @@ function CodeMirrorEditorBody({
           }
         }),
         EditorView.domEventHandlers({
-          click: (event) => {
+          click: (event, view) => {
             const target = event.target as HTMLElement;
-            const wikilink = target.closest(".cm-wikilink") as HTMLElement | null;
+
+            // Live-preview wikilink widget — matches both the legacy
+            // `.cm-wikilink` decoration (raw markdown view) and the
+            // new live-preview `.cm-lp-wikilink` widget.
+            const wikilink = target.closest(
+              ".cm-wikilink, .cm-lp-wikilink",
+            ) as HTMLElement | null;
             if (wikilink) {
               const linkTarget = wikilink.getAttribute("data-target");
               if (linkTarget) {
@@ -627,6 +657,25 @@ function CodeMirrorEditorBody({
                 );
               }
               return true;
+            }
+
+            // Live-preview task checkbox — flip `[ ]` <-> `[x]` in
+            // the underlying document at the stored position so the
+            // toggle persists on save. The widget itself is replaced
+            // by the next decoration rebuild.
+            if (target.matches?.(".cm-lp-task")) {
+              const input = target as HTMLInputElement;
+              const posAttr = input.getAttribute("data-pos");
+              if (posAttr) {
+                const pos = Number(posAttr);
+                const text = view.state.doc.sliceString(pos, pos + 3);
+                const replacement = /\[[xX]\]/.test(text) ? "[ ]" : "[x]";
+                view.dispatch({
+                  changes: { from: pos, to: pos + 3, insert: replacement },
+                });
+                event.preventDefault();
+                return true;
+              }
             }
             return false;
           },
@@ -644,7 +693,7 @@ function CodeMirrorEditorBody({
       loadedFileRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, isDark, showLineNumbers, wordWrap, vimEnabled]);
+  }, [filePath, isDark, showLineNumbers, wordWrap, vimEnabled, livePreview]);
 
   // Sync external content into the editor doc.
   useEffect(() => {
@@ -671,19 +720,46 @@ function CodeMirrorEditorBody({
     return () => window.removeEventListener("keydown", handler);
   }, []);
 
-  // Doc-header "Find…" bridge — opens CodeMirror's search panel.
+  // The doc-header ⋯ → Find command no longer opens CodeMirror's
+  // inline search panel — it routes to the left-sidebar global
+  // search (VS-Code style). CM's own Ctrl+F keymap (registered via
+  // `searchKeymap` in the extensions array) still works inside the
+  // editor for the user-already-typing flow.
+
+  // Cross-pane "jump to line" — fired by the search panel after a
+  // result click. We scroll the line into view + flash-highlight it
+  // briefly so the user spots where the match landed.
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent<{ filePath?: string }>).detail;
-      if (detail?.filePath && detail.filePath !== filePath) return;
+      const detail = (e as CustomEvent<{ fileId?: string; line?: number }>).detail;
+      if (!detail?.fileId || detail.fileId !== filePath) return;
       const view = viewRef.current;
-      if (!view) return;
-      view.focus();
-      openSearchPanel(view);
+      const ln = detail.line;
+      if (!view || !ln || ln < 1) return;
+      const lineCount = view.state.doc.lines;
+      if (ln > lineCount) return;
+      const line = view.state.doc.line(ln);
+      view.dispatch({
+        effects: [
+          EditorView.scrollIntoView(line.from, { y: "center" }),
+          flashLineEffect.of(line.from),
+        ],
+        selection: { anchor: line.from },
+      });
+      window.setTimeout(() => {
+        try {
+          view.dispatch({ effects: clearFlashLineEffect.of(null) });
+        } catch {
+          /* view may have been destroyed */
+        }
+      }, 1600);
     };
-    window.addEventListener("flux-editor-find", handler as EventListener);
+    window.addEventListener("flux-jump-to-line", handler as EventListener);
     return () =>
-      window.removeEventListener("flux-editor-find", handler as EventListener);
+      window.removeEventListener(
+        "flux-jump-to-line",
+        handler as EventListener,
+      );
   }, [filePath]);
 
   return <div ref={editorRef} className="flex-1 min-h-0 min-w-0 overflow-hidden" />;

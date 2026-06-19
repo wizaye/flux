@@ -123,14 +123,7 @@ export function SlidesView(props: EditorViewProps) {
       header={
         <PaneDocHeader
           tab={tab}
-          onSplit={paneActions.onSplit}
-          onToggleReading={paneActions.onToggleReading}
-          onSetSlides={paneActions.onSetSlides}
-          onRename={paneActions.onRename}
-          onCopyPath={paneActions.onCopyPath}
-          onShowInExplorer={paneActions.onShowInExplorer}
-          onRevealInNav={paneActions.onRevealInNav}
-          onDelete={paneActions.onDelete}
+          {...paneActions}
           topRightInsetPx={paneActions.topRightInsetPx ?? 0}
           dragging={paneActions.dragging ?? false}
         />

@@ -1,3 +1,28 @@
+/**
+ * Flux settings dialog — Obsidian-parity layout with shadcn primitives.
+ *
+ * Layout:
+ *   ─ 1100×740 fixed dialog, no padding (panes set their own)
+ *   ─ Left:   240px sidebar with search + grouped section list
+ *   ─ Right:  scrolling content with breadcrumb header + close button
+ *   ─ Body:   grouped Sections (h2 title + card) containing Rows
+ *             (title + description on the left, control on the right)
+ *
+ * All controls use shadcn primitives (`Switch`, `Select`, `Slider`,
+ * `RadioGroup`, `Input`, `Button`) — no hand-rolled toggles — so the
+ * focus rings, sizing, and theme tokens stay consistent with the rest
+ * of the app.
+ *
+ * Section bodies in this file:
+ *   • GeneralBody     — vault metadata, auto-update, restore prefs
+ *   • EditorBody      — line numbers, word wrap, vim, font size,
+ *                       default view mode
+ *   • AppearanceBody  — theme, ribbon/tabbar toggles, theme palette
+ *   • HotkeysBody     — keyboard recorder for every HotkeyId
+ *   • FilesBody, AIPrivacyBody, KeychainBody, *PluginsBody — stubs
+ *     that surface upcoming features via the same shell so the
+ *     visual language stays consistent.
+ */
 import * as React from "react";
 import {
   Dialog,
@@ -5,18 +30,21 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { DotmSquare3 } from "@/components/ui/dotm-square-3";
+import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import {
   useSettingsStore,
@@ -46,35 +74,16 @@ import {
   IcSwap,
   IcSync,
   IcTerminal,
+  IcSearch,
+  IcClose,
+  IcRefresh,
 } from "@/components/flux-ui/common/icons";
 
-/**
- * SettingsDialog — flux's settings shell, structurally + visually
- * ported from `lattice/src/components/modals/SettingsModal.tsx` +
- * `SettingsModal.css`. Built on shadcn `Dialog` per project rules.
- *
- * Visual targets (mapped 1:1 to lattice CSS):
- *   ─ dialog       1100px × 740px, 12px radius, deep shadow
- *   ─ sidebar      240px wide, two-tone darker surface than content
- *   ─ content      lighter active surface, 36px padding, 760px text body
- *   ─ section item 30px high, gap-10, font 13px, --icon-sm icons
- *   ─ group label  font 11px / 600 / normal-case / 0.04em tracking
- *   ─ subheading   17px / 600  (settings-subheading)
- *   ─ row title    14px / 600  (settings-row-title)
- *   ─ row desc     12px / 1.45 muted  (settings-row-desc)
- *   ─ card         rounded 10px, 1px border, subtle bg
- *
- * The two-tone surface (sidebar `#161616` darker, content `#262626`
- * lighter — light mode mirrors with `#ece9e3` / `#ffffff`) is a hard
- * requirement: in the lattice port the greyed sidebar reads as
- * chrome while the content pane reads as the active workspace.
- */
+// ── Section catalogue ────────────────────────────────────────────────
 
 type Section = {
   id: string;
   label: string;
-  // Icons originate from `flux-ui/common/icons.tsx` (lucide-wrapped
-  // SVGs). The Section component only needs `className`.
   Icon: React.FC<{ className?: string }>;
 };
 
@@ -109,7 +118,7 @@ const COMMUNITY_PLUGIN_SECTIONS: Section[] = [
   { id: "kanban", label: "Kanban", Icon: IcBookmark },
 ];
 
-const ALL_SECTIONS = [
+const ALL_SECTIONS: Section[] = [
   ...OPTION_SECTIONS,
   ...CORE_PLUGIN_SECTIONS,
   ...COMMUNITY_PLUGIN_SECTIONS,
@@ -120,8 +129,26 @@ export interface SettingsDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+// ── Dialog shell ─────────────────────────────────────────────────────
+
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
-  const [active, setActive] = React.useState<string>("appearance");
+  const [active, setActive] = React.useState<string>("general");
+  const [query, setQuery] = React.useState("");
+
+  // Filter the sidebar list when the user types in the search box.
+  // Performs a case-insensitive contains match on section labels.
+  const filteredOptions = React.useMemo(
+    () => filterSections(OPTION_SECTIONS, query),
+    [query],
+  );
+  const filteredCore = React.useMemo(
+    () => filterSections(CORE_PLUGIN_SECTIONS, query),
+    [query],
+  );
+  const filteredCommunity = React.useMemo(
+    () => filterSections(COMMUNITY_PLUGIN_SECTIONS, query),
+    [query],
+  );
 
   const activeSection = React.useMemo(
     () => ALL_SECTIONS.find((s) => s.id === active) ?? OPTION_SECTIONS[0],
@@ -131,72 +158,107 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        showCloseButton={false}
         className={cn(
-          // Lattice: min(1100px, 96vw) × min(740px, 92vh)
+          // Lattice/Obsidian-parity dialog dimensions.
           "w-[min(1100px,96vw)] max-w-[min(1100px,96vw)] sm:max-w-[min(1100px,96vw)]",
           "h-[min(740px,92vh)]",
-          // Unified surface: matches sidebar so both panes feel like one
-          // continuous chrome slab. Light = white, dark = near-black.
-          "bg-white dark:bg-neutral-950",
-          // Two-column layout, no padding (panes set their own).
+          // Two-pane grid: sidebar 240px, content fills the rest.
           "grid grid-cols-[240px_minmax(0,1fr)] gap-0 p-0 overflow-hidden",
+          "bg-background border-border",
         )}
       >
-        {/* sr-only — Radix a11y requirement */}
         <DialogTitle className="sr-only">Settings</DialogTitle>
         <DialogDescription className="sr-only">
           Configure flux preferences, appearance, hotkeys, and plugins.
         </DialogDescription>
 
-        {/* Left: section list (darker chrome surface — inverted) */}
-        <ScrollArea
+        {/* ─── Sidebar ─────────────────────────────────────────────── */}
+        <aside
           className={cn(
-            // min-h-0 is REQUIRED on grid items so the cell honours the
-            // parent's fixed height instead of expanding to fit content.
-            "h-full min-h-0",
-            // Unified palette with right pane — sidebar slightly lifted
-            // off the dialog canvas in light mode, identical in dark.
-            "bg-neutral-100 dark:bg-neutral-950",
-            "border-r border-neutral-200 dark:border-neutral-800",
-            "rounded-l-xl",
+            "flex flex-col h-full min-h-0",
+            "bg-muted/50 dark:bg-muted/20",
+            "border-r border-border",
           )}
         >
-          <aside className="px-2 pt-3 pb-[18px]">
-            <SectionGroup
-              label="Options"
-              sections={OPTION_SECTIONS}
-              active={active}
-              onSelect={setActive}
-            />
-            <SectionGroup
-              label="Core plugins"
-              sections={CORE_PLUGIN_SECTIONS}
-              active={active}
-              onSelect={setActive}
-            />
-            <SectionGroup
-              label="Community plugins"
-              sections={COMMUNITY_PLUGIN_SECTIONS}
-              active={active}
-              onSelect={setActive}
-            />
-          </aside>
-        </ScrollArea>
-
-        {/* Right: active surface */}
-        <ScrollArea className="h-full min-h-0 rounded-r-xl">
-          <main className="p-9">
-            <div className="max-w-[760px]">
-              <SectionBody section={activeSection} />
+          <div className="px-3 pt-3 pb-2">
+            <div className="relative">
+              <IcSearch className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 [width:14px] [height:14px] opacity-60" />
+              <Input
+                placeholder="Search settings…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="h-8 pl-7 text-[12px]"
+              />
             </div>
-          </main>
-        </ScrollArea>
+          </div>
+          <ScrollArea className="flex-1 min-h-0">
+            <nav className="px-2 pb-4">
+              <SectionGroup
+                label="Options"
+                sections={filteredOptions}
+                active={active}
+                onSelect={setActive}
+              />
+              <SectionGroup
+                label="Core plugins"
+                sections={filteredCore}
+                active={active}
+                onSelect={setActive}
+              />
+              <SectionGroup
+                label="Community plugins"
+                sections={filteredCommunity}
+                active={active}
+                onSelect={setActive}
+              />
+            </nav>
+          </ScrollArea>
+        </aside>
+
+        {/* ─── Content pane ────────────────────────────────────────── */}
+        <div className="relative flex flex-col h-full min-h-0 bg-background">
+          {/* Header strip — section breadcrumb on the left, close on right */}
+          <div className="flex items-center justify-between h-12 px-6 border-b border-border shrink-0">
+            <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+              <span>Settings</span>
+              <span className="opacity-50">/</span>
+              <span className="text-foreground font-medium">
+                {activeSection.label}
+              </span>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="Close settings"
+              onClick={() => onOpenChange(false)}
+              className="h-7 w-7 p-0 -mr-2"
+            >
+              <IcClose className="[width:14px] [height:14px]" />
+            </Button>
+          </div>
+
+          {/* Body */}
+          <ScrollArea className="flex-1 min-h-0">
+            <main className="px-6 py-5">
+              <div className="max-w-[760px]">
+                <SectionBody section={activeSection} />
+              </div>
+            </main>
+          </ScrollArea>
+        </div>
       </DialogContent>
     </Dialog>
   );
 }
 
-// ── Sidebar helpers ──────────────────────────────────────────────────
+function filterSections(list: Section[], query: string): Section[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return list;
+  return list.filter((s) => s.label.toLowerCase().includes(q));
+}
+
+// ── Sidebar group ────────────────────────────────────────────────────
 
 function SectionGroup({
   label,
@@ -209,423 +271,514 @@ function SectionGroup({
   active: string;
   onSelect: (id: string) => void;
 }) {
+  if (sections.length === 0) return null;
   return (
-    <div className="mt-[14px] first:mt-0">
-      <div className="px-[10px] pt-[6px] pb-1 text-[11px] font-semibold tracking-[0.04em] text-neutral-500 dark:text-neutral-500">
+    <div className="mt-3 first:mt-1">
+      <div className="px-2 pt-1 pb-1 text-[10px] font-semibold tracking-[0.06em] uppercase text-muted-foreground/80">
         {label}
       </div>
-      <ul className="flex flex-col gap-px m-0 p-0 list-none">
-        {sections.map((s) => (
-          <li key={s.id}>
-            <button
-              type="button"
-              className={cn(
-                "group flex w-full items-center gap-[10px] h-[28px] px-[10px]",
-                "rounded-[6px] text-[13px] text-left transition-colors duration-75",
-                "outline-none focus-visible:ring-0",
-                // Force ALL nested svg icons to a fixed small size,
-                // bypassing the icon wrapper's --icon-md default.
-                "[&_svg]:size-[14px] [&_svg]:shrink-0",
-                active === s.id
-                  ? // Active pill: clearly raised, brighter text.
-                    "bg-white text-neutral-900 dark:bg-neutral-800 dark:text-white shadow-[0_1px_2px_rgba(0,0,0,0.04)] dark:shadow-none"
-                  : "text-neutral-600 dark:text-neutral-400 hover:bg-black/[0.04] dark:hover:bg-white/[0.04] hover:text-neutral-900 dark:hover:text-white",
-              )}
-              onClick={() => onSelect(s.id)}
-            >
-              <s.Icon />
-              <span className="flex-1 truncate">{s.label}</span>
-            </button>
-          </li>
-        ))}
+      <ul className="flex flex-col gap-px">
+        {sections.map((s) => {
+          const isActive = active === s.id;
+          return (
+            <li key={s.id}>
+              <button
+                type="button"
+                onClick={() => onSelect(s.id)}
+                className={cn(
+                  "group flex w-full items-center gap-2 h-7 px-2 rounded-md text-[12.5px] text-left",
+                  "transition-colors duration-75 outline-none",
+                  "[&_svg]:size-[14px] [&_svg]:shrink-0",
+                  isActive
+                    ? "bg-accent text-accent-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-accent/50",
+                )}
+              >
+                <s.Icon />
+                <span className="flex-1 truncate">{s.label}</span>
+              </button>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
 }
 
-// ── Content router ───────────────────────────────────────────────────
+// ── Body router ──────────────────────────────────────────────────────
 
 function SectionBody({ section }: { section: Section }) {
-  if (section.id === "appearance") return <AppearanceBody />;
-  if (section.id === "general") return <GeneralBody />;
-  if (section.id === "hotkeys") return <HotkeysBody />;
-  return <ComingSoonBody section={section} />;
+  switch (section.id) {
+    case "general":
+      return <GeneralBody />;
+    case "editor":
+      return <EditorBody />;
+    case "appearance":
+      return <AppearanceBody />;
+    case "hotkeys":
+      return <HotkeysBody />;
+    case "files":
+      return <FilesLinksBody />;
+    case "ai-privacy":
+      return <AIPrivacyBody />;
+    default:
+      return <ComingSoonBody section={section} />;
+  }
 }
 
-// Section grouping — Obsidian-style. Optional H3 heading sits ABOVE
-// a subtle rounded card containing the rows. Multiple Sections stack
-// vertically inside a body to mirror Obsidian's grouped settings.
-function Section({
-  title,
-  children,
-}: {
-  title?: string;
-  children: React.ReactNode;
-}) {
+// ── Reusable primitives ──────────────────────────────────────────────
+
+/**
+ * Section title — sits above a card (or list of rows). Obsidian uses
+ * the title as a visual divider, not as a tooltip / header chrome,
+ * so we keep it lightweight: regular weight, slightly larger than
+ * body text, with generous top spacing on subsequent sections.
+ */
+function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <div className="mt-[28px] first:mt-0">
-      {title && (
-        <h3 className="m-0 mb-2 px-[2px] text-[15px] font-semibold tracking-[-0.005em] text-neutral-900 dark:text-white">
-          {title}
-        </h3>
+    <h2
+      className={cn(
+        "text-[18px] font-semibold tracking-tight text-foreground",
+        "mt-8 mb-3 first:mt-0",
       )}
-      <div
-        className={cn(
-          // Subtle card grouping the rows together. Sits on top of
-          // the unified near-black canvas in dark mode.
-          "rounded-[10px] border",
-          "bg-neutral-50 border-neutral-200",
-          "dark:bg-neutral-900 dark:border-neutral-800",
-          "px-4",
-        )}
-      >
-        {children}
-      </div>
-    </div>
+    >
+      {children}
+    </h2>
   );
 }
 
-// Flat row — sits inside a Section card. Title + description left,
-// control right, subtle bottom divider between siblings.
+/**
+ * Row — single setting entry with title + optional description on the
+ * left, control on the right. Border between rows is a subtle bottom
+ * line; last row drops it so cards have clean bottom edges.
+ */
 function Row({
   title,
   description,
   children,
+  className,
 }: {
-  title: string;
-  description?: string;
+  title: React.ReactNode;
+  description?: React.ReactNode;
   children: React.ReactNode;
+  className?: string;
 }) {
   return (
     <div
       className={cn(
-        "flex items-center gap-4 py-[14px]",
-        "border-b border-neutral-200 dark:border-neutral-800 last:border-b-0",
+        "flex items-start gap-4 py-3.5 first:pt-3 last:pb-3",
+        "border-b border-border last:border-b-0",
+        className,
       )}
     >
-      <div className="flex-1 min-w-0">
-        <div className="text-[14px] font-medium text-neutral-900 dark:text-white">
+      <div className="flex-1 min-w-0 pr-2">
+        <div className="text-[13.5px] font-medium text-foreground leading-snug">
           {title}
         </div>
         {description && (
-          <div className="mt-0.5 text-[12px] leading-[1.45] text-neutral-600 dark:text-neutral-400">
+          <div className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
             {description}
           </div>
         )}
       </div>
-      <div className="shrink-0">{children}</div>
+      <div className="shrink-0 flex items-center pt-0.5">{children}</div>
     </div>
   );
 }
 
-// Disabled "Manage" button used as the right-side control in several
-// rows (Themes, Ribbon menu, fonts). Read-only placeholder until the
-// underlying panels exist.
-function ManageButton({ children = "Manage" }: { children?: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      disabled
-      className={cn(
-        "h-7 px-3 rounded-[6px] text-[12px] font-medium",
-        "bg-neutral-100 border border-neutral-200 text-neutral-700",
-        "dark:bg-neutral-800 dark:border-neutral-700 dark:text-neutral-200",
-        "cursor-not-allowed",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-// Lattice-style pill toggle (34×18px) — used inside Row controls.
-function Switch({
-  checked,
-  onChange,
-}: {
-  checked: boolean;
-  onChange: (next: boolean) => void;
-}) {
-  return (
-    <label className="relative inline-block w-[34px] h-[18px] cursor-pointer">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="peer absolute inset-0 w-full h-full opacity-0 cursor-pointer m-0 z-10"
-      />
-      <span
-        className={cn(
-          "absolute inset-0 rounded-full transition-colors duration-100",
-          "bg-muted-foreground/30",
-          // Obsidian / lattice signature accent — purple stays the
-          // brand toggle color across both themes.
-          "peer-checked:bg-[#7f6df2]",
-        )}
-      />
-      <span
-        className={cn(
-          "absolute top-[2px] left-[2px] w-[14px] h-[14px] rounded-full bg-white",
-          "shadow-[0_1px_2px_rgba(0,0,0,0.35)]",
-          "transition-transform duration-100",
-          "peer-checked:translate-x-[16px]",
-        )}
-      />
-    </label>
-  );
-}
-
-// ── Real section bodies ──────────────────────────────────────────────
-
-function AppearanceBody() {
-  const [isDark, setIsDark] = React.useState(
-    () =>
-      typeof document !== "undefined" &&
-      document.documentElement.classList.contains("dark"),
-  );
-
-  React.useEffect(() => {
-    const root = document.documentElement;
-    const obs = new MutationObserver(() => {
-      setIsDark(root.classList.contains("dark"));
-    });
-    obs.observe(root, { attributes: true, attributeFilter: ["class"] });
-    return () => obs.disconnect();
-  }, []);
-
-  const setTheme = (next: "light" | "dark") => {
-    const root = document.documentElement;
-    if (next === "dark") root.classList.add("dark");
-    else root.classList.remove("dark");
-    try {
-      localStorage.setItem("flux.theme", next);
-    } catch {
-      /* noop */
-    }
-  };
-
-  return (
-    <div>
-      <Section>
-        <Row
-          title="Base color scheme"
-          description="Choose flux's default color scheme."
-        >
-          <div className="inline-flex items-center gap-px rounded-[6px] border border-border/60 p-[2px]">
-            <ThemeChip active={!isDark} onClick={() => setTheme("light")}>
-              Light
-            </ThemeChip>
-            <ThemeChip active={isDark} onClick={() => setTheme("dark")}>
-              Dark
-            </ThemeChip>
-          </div>
-        </Row>
-        <Row
-          title="Accent color"
-          description="Choose the accent color used throughout the app."
-        >
-          <div className="flex items-center gap-2">
-            {["#7f6df2", "#ea580c", "#2563eb", "#16a34a", "#dc2626"].map(
-              (c) => (
-                <button
-                  key={c}
-                  type="button"
-                  aria-label={`Accent ${c}`}
-                  className="w-4 h-4 rounded-full border border-border/60 opacity-50 cursor-not-allowed"
-                  style={{ backgroundColor: c }}
-                  disabled
-                />
-              ),
-            )}
-          </div>
-        </Row>
-        <Row
-          title="Themes"
-          description="Manage installed themes and browse community themes."
-        >
-          <ManageButton />
-        </Row>
-        <Row
-          title="Current community themes"
-          description="You currently have 0 themes installed."
-        >
-          <span />
-        </Row>
-      </Section>
-
-      <Section title="Interface">
-        <Row
-          title="Inline title"
-          description="Display the filename as an editable title inline with the file contents."
-        >
-          <Switch checked={true} onChange={() => {}} />
-        </Row>
-        <Row
-          title="Show tab title bar"
-          description="Display the header at the top of every tab."
-        >
-          <Switch checked={true} onChange={() => {}} />
-        </Row>
-        <Row
-          title="Show ribbon"
-          description="Display the vertical toolbar on the side of the window."
-        >
-          <Switch checked={true} onChange={() => {}} />
-        </Row>
-        <Row
-          title="Ribbon menu configuration"
-          description="Configure what commands appear in the ribbon menu."
-        >
-          <ManageButton />
-        </Row>
-      </Section>
-
-      <Section title="Font">
-        <Row
-          title="Interface font"
-          description="Set the base font for all of flux."
-        >
-          <ManageButton />
-        </Row>
-        <Row
-          title="Text font"
-          description="Set the font for editing and reading views."
-        >
-          <ManageButton />
-        </Row>
-      </Section>
-    </div>
-  );
-}
-
-function ThemeChip({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "h-[22px] px-[10px] rounded-[4px] text-[11px] font-medium",
-        "transition-colors duration-75 outline-none",
-        active
-          ? "bg-neutral-200 text-neutral-900 dark:bg-neutral-700 dark:text-white"
-          : "text-neutral-600 dark:text-neutral-400 hover:bg-neutral-200/60 dark:hover:bg-neutral-800/60",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
+// ── General ──────────────────────────────────────────────────────────
 
 function GeneralBody() {
-  const [autoRestore, setAutoRestore] = React.useState(true);
-  const [confirmDelete, setConfirmDelete] = React.useState(true);
-  const [autoUpdate, setAutoUpdate] = React.useState(true);
+  const skipMergeConfirm = useSettingsStore((s) => s.skipMergeConfirm);
+  const setSkipMergeConfirm = useSettingsStore((s) => s.setSkipMergeConfirm);
+
   return (
     <div>
-      <Section>
-        <Row
-          title="Vault name"
-          description="The display name for your current vault."
-        >
-          <Input
-            defaultValue="My Vault"
-            className={cn(
-              "h-7 w-48 text-[12px] rounded-[6px]",
-            )}
-          />
-        </Row>
-        <Row
-          title="Automatic updates"
-          description="Turn this off to prevent the app from checking for updates."
-        >
-          <Switch checked={autoUpdate} onChange={setAutoUpdate} />
-        </Row>
-      </Section>
+      <SectionTitle>General</SectionTitle>
+      <Row
+        title="Vault name"
+        description="The display name for your current vault. Used in the title bar and breadcrumbs."
+      >
+        <Input
+          defaultValue="My Vault"
+          className="h-8 w-[220px] text-[12.5px]"
+        />
+      </Row>
+      <Row
+        title="Automatic updates"
+        description="Check for new flux releases on launch and notify when one is available."
+      >
+        <Switch defaultChecked />
+      </Row>
+      <Row
+        title="Open last vault on startup"
+        description="When enabled, flux re-opens the most recently used vault automatically."
+      >
+        <Switch defaultChecked />
+      </Row>
 
-      <Section title="Workspace">
-        <Row
-          title="Auto-restore vault"
-          description="Open the last active vault on startup."
-        >
-          <Switch checked={autoRestore} onChange={setAutoRestore} />
-        </Row>
-        <Row
-          title="Confirm before delete"
-          description="Show a confirmation dialog before deleting files."
-        >
-          <Switch checked={confirmDelete} onChange={setConfirmDelete} />
-        </Row>
-      </Section>
+      <SectionTitle>Confirmation prompts</SectionTitle>
+      <Row
+        title="Confirm merge"
+        description={
+          <>
+            Show a confirmation dialog before merging the source file
+            into the target. Disabled when you check{" "}
+            <em>Don't ask again</em> on the merge prompt.
+          </>
+        }
+      >
+        <Switch
+          checked={!skipMergeConfirm}
+          onCheckedChange={(v) => setSkipMergeConfirm(!v)}
+        />
+      </Row>
+      <Row
+        title="Confirm file deletion"
+        description="Show a confirmation dialog before moving a file to trash."
+      >
+        <Switch defaultChecked />
+      </Row>
     </div>
   );
 }
 
-// ── Hotkey recorder ──────────────────────────────────────────────────────────
+// ── Editor ───────────────────────────────────────────────────────────
 
-/**
- * Listens for the next keydown event and calls `onCapture` with the
- * resulting binding. Renders a bordered capture zone that intercepts
- * keys — Escape cancels without recording.
- */
-function HotkeyRecorder({
-  onCapture,
-  onCancel,
-}: {
-  onCapture: (b: HotkeyBinding) => void;
-  onCancel: () => void;
-}) {
-  const ref = React.useRef<HTMLDivElement>(null);
-
-  React.useEffect(() => {
-    ref.current?.focus();
-    const el = ref.current;
-    if (!el) return;
-
-    const handler = (e: KeyboardEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.key === "Escape") {
-        onCancel();
-        return;
-      }
-      // Ignore bare modifier presses.
-      if (["Meta", "Control", "Shift", "Alt"].includes(e.key)) return;
-
-      onCapture(
-        makeBinding(e.key, {
-          metaKey: e.metaKey,
-          ctrlKey: e.ctrlKey,
-          shiftKey: e.shiftKey,
-          altKey: e.altKey,
-        }),
-      );
-    };
-    el.addEventListener("keydown", handler);
-    return () => el.removeEventListener("keydown", handler);
-  }, [onCapture, onCancel]);
+function EditorBody() {
+  const lineNumbers = useSettingsStore((s) => s.lineNumbers);
+  const setLineNumbers = useSettingsStore((s) => s.setLineNumbers);
+  const wordWrap = useSettingsStore((s) => s.wordWrap);
+  const setWordWrap = useSettingsStore((s) => s.setWordWrap);
+  const vimMode = useSettingsStore((s) => s.vimMode);
+  const setVimMode = useSettingsStore((s) => s.setVimMode);
+  const fontSize = useSettingsStore((s) => s.fontSize);
+  const setFontSize = useSettingsStore((s) => s.setFontSize);
+  const defaultViewMode = useSettingsStore((s) => s.defaultViewMode);
+  const setDefaultViewMode = useSettingsStore((s) => s.setDefaultViewMode);
 
   return (
-    <div
-      ref={ref}
-      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-      tabIndex={0}
-      className={cn(
-        "inline-flex items-center justify-center h-[28px] min-w-[110px] px-3 rounded-[6px]",
-        "text-[11px] text-neutral-500 dark:text-neutral-400",
-        "border border-dashed border-[#7f6df2] bg-[#7f6df2]/5",
-        "outline-none focus:ring-1 focus:ring-[#7f6df2]/60",
-        "cursor-text select-none",
-      )}
-    >
-      Press keys…
+    <div>
+      <SectionTitle>Editor</SectionTitle>
+      <Row
+        title="Default editing mode"
+        description="Mode every markdown file opens in. Live preview renders inline (Obsidian-style); Source keeps raw markdown visible; Reading is read-only."
+      >
+        <Select
+          value={defaultViewMode}
+          onValueChange={(v) =>
+            setDefaultViewMode(v as "source" | "live" | "preview")
+          }
+        >
+          <SelectTrigger className="w-[180px] h-8 text-[12.5px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="live">Live preview</SelectItem>
+            <SelectItem value="source">Source mode</SelectItem>
+            <SelectItem value="preview">Reading view</SelectItem>
+          </SelectContent>
+        </Select>
+      </Row>
+
+      <Row
+        title="Font size"
+        description={`Base font size used by the editor and reading view (${fontSize}px).`}
+      >
+        <div className="w-[200px] flex items-center gap-3">
+          <Slider
+            min={11}
+            max={24}
+            step={1}
+            value={[fontSize]}
+            onValueChange={([v]) => v !== undefined && setFontSize(v)}
+            className="flex-1"
+          />
+          <span className="w-8 text-right text-[12px] tabular-nums text-muted-foreground">
+            {fontSize}
+          </span>
+        </div>
+      </Row>
+
+      <Row
+        title="Show line numbers"
+        description="Display line numbers in the CodeMirror gutter."
+      >
+        <Switch checked={lineNumbers} onCheckedChange={setLineNumbers} />
+      </Row>
+
+      <Row
+        title="Soft wrap long lines"
+        description="Wrap long lines at the pane edge instead of horizontally scrolling."
+      >
+        <Switch checked={wordWrap} onCheckedChange={setWordWrap} />
+      </Row>
+
+      <Row
+        title="Vim key bindings"
+        description="Enable Vim-style modal editing inside the CodeMirror editor."
+      >
+        <Switch checked={vimMode} onCheckedChange={setVimMode} />
+      </Row>
+
+      <SectionTitle>Code blocks</SectionTitle>
+      <Row
+        title="Syntax highlighting"
+        description="Use Shiki to colourise fenced code blocks (uses VS Code's themes)."
+      >
+        <Switch defaultChecked disabled />
+      </Row>
+    </div>
+  );
+}
+
+// ── Appearance ───────────────────────────────────────────────────────
+
+function AppearanceBody() {
+  const theme = useSettingsStore((s) => s.theme);
+  const setTheme = useSettingsStore((s) => s.setTheme);
+  const showRibbon = useSettingsStore((s) => s.showRibbon);
+  const setShowRibbon = useSettingsStore((s) => s.setShowRibbon);
+  const showTabBar = useSettingsStore((s) => s.showTabBar);
+  const setShowTabBar = useSettingsStore((s) => s.setShowTabBar);
+
+  return (
+    <div>
+      <SectionTitle>Appearance</SectionTitle>
+      <Row
+        title="Base color scheme"
+        description="Match the system, or pin to light / dark."
+      >
+        <RadioGroup
+          value={theme}
+          onValueChange={(v) => setTheme(v as "system" | "light" | "dark")}
+          className="flex items-center gap-1.5"
+        >
+          {(["system", "light", "dark"] as const).map((opt) => (
+            <label
+              key={opt}
+              htmlFor={`theme-${opt}`}
+              className={cn(
+                "flex items-center gap-2 h-8 px-3 rounded-md border cursor-pointer select-none capitalize text-[12.5px]",
+                "transition-colors duration-75",
+                theme === opt
+                  ? "bg-accent text-accent-foreground border-accent"
+                  : "border-border text-muted-foreground hover:text-foreground hover:bg-accent/40",
+              )}
+            >
+              <RadioGroupItem id={`theme-${opt}`} value={opt} className="sr-only" />
+              {opt}
+            </label>
+          ))}
+        </RadioGroup>
+      </Row>
+
+      <Row
+        title="Accent color"
+        description="Color used for active selections, links, and the brand toggle."
+      >
+        <div className="flex items-center gap-2">
+          {[
+            { c: "#7f6df2", name: "Iris" },
+            { c: "#ea580c", name: "Orange" },
+            { c: "#2563eb", name: "Blue" },
+            { c: "#16a34a", name: "Green" },
+            { c: "#dc2626", name: "Red" },
+          ].map(({ c, name }) => (
+            <button
+              key={c}
+              type="button"
+              aria-label={`Accent ${name}`}
+              title={name}
+              className={cn(
+                "w-5 h-5 rounded-full ring-1 ring-border opacity-60 cursor-not-allowed",
+              )}
+              style={{ backgroundColor: c }}
+              disabled
+            />
+          ))}
+        </div>
+      </Row>
+
+      <SectionTitle>Interface</SectionTitle>
+      <Row
+        title="Show ribbon"
+        description="Display the vertical activity bar with view-switcher icons on the left edge."
+      >
+        <Switch checked={showRibbon} onCheckedChange={setShowRibbon} />
+      </Row>
+      <Row
+        title="Show tab bar"
+        description="Display the editor tab bar above each pane. Hide it for a borderless writing surface."
+      >
+        <Switch checked={showTabBar} onCheckedChange={setShowTabBar} />
+      </Row>
+      <Row
+        title="Translucent window"
+        description="Use a slightly translucent background (macOS / Windows 11 vibrancy effect)."
+      >
+        <Switch defaultChecked={false} disabled />
+      </Row>
+    </div>
+  );
+}
+
+// ── Files & links ────────────────────────────────────────────────────
+
+function FilesLinksBody() {
+  return (
+    <div>
+      <SectionTitle>Files</SectionTitle>
+      <Row
+        title="Default location for new notes"
+        description="Folder to place new notes in. Use a forward slash for nesting; leave blank for vault root."
+      >
+        <Input
+          defaultValue=""
+          placeholder="vault root"
+          className="h-8 w-[220px] text-[12.5px]"
+        />
+      </Row>
+      <Row
+        title="Confirm file deletion"
+        description="Show a confirmation dialog before moving a file to trash."
+      >
+        <Switch defaultChecked />
+      </Row>
+      <Row
+        title="Always use atomic writes"
+        description="Write to a temp file in the same directory, fsync, then rename. Safer for power loss; slightly slower."
+      >
+        <Switch defaultChecked disabled />
+      </Row>
+
+      <SectionTitle>Links</SectionTitle>
+      <Row
+        title="Use [[wikilinks]]"
+        description="Use `[[Note name]]` syntax for internal links. When disabled, links use the Markdown `[text](url)` form."
+      >
+        <Switch defaultChecked />
+      </Row>
+      <Row
+        title="Update links on rename"
+        description="When you rename or move a file, find every `[[wikilink]]` and `[text](path.md)` referencing it and update them."
+      >
+        <Switch defaultChecked />
+      </Row>
+    </div>
+  );
+}
+
+// ── AI & Privacy ─────────────────────────────────────────────────────
+
+function AIPrivacyBody() {
+  return (
+    <div>
+      <SectionTitle>AI</SectionTitle>
+      <Row
+        title="Enable AI features"
+        description="Master switch for autocomplete, summaries, and the explain-this-block command. When off, no AI surfaces are visible."
+      >
+        <Switch defaultChecked />
+      </Row>
+      <Row
+        title="Embeddings provider"
+        description="Engine used to generate semantic embeddings for related-notes suggestions."
+      >
+        <Select defaultValue="local">
+          <SelectTrigger className="w-[180px] h-8 text-[12.5px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="local">Local (Ollama)</SelectItem>
+            <SelectItem value="openai">OpenAI</SelectItem>
+            <SelectItem value="anthropic">Anthropic</SelectItem>
+            <SelectItem value="off">Off</SelectItem>
+          </SelectContent>
+        </Select>
+      </Row>
+
+      <SectionTitle>Privacy</SectionTitle>
+      <Row
+        title="Send anonymous telemetry"
+        description="Help improve flux by sending crash reports and anonymous usage metrics. No vault content is ever transmitted."
+      >
+        <Switch defaultChecked={false} />
+      </Row>
+      <Row
+        title="Allow cloud LLM calls"
+        description="When disabled, only user-initiated AI commands run; background tasks (autocomplete, summaries) skip cloud calls entirely."
+      >
+        <Switch defaultChecked />
+      </Row>
+    </div>
+  );
+}
+
+// ── Hotkeys ──────────────────────────────────────────────────────────
+
+function HotkeysBody() {
+  const hotkeys = useSettingsStore((s) => s.hotkeys);
+  const setHotkey = useSettingsStore((s) => s.setHotkey);
+  const resetHotkey = useSettingsStore((s) => s.resetHotkey);
+  const resetAllHotkeys = useSettingsStore((s) => s.resetAllHotkeys);
+  const [filter, setFilter] = React.useState("");
+
+  const ids = Object.keys(HOTKEY_LABELS) as HotkeyId[];
+  const visible = ids.filter(
+    (id) =>
+      filter === "" ||
+      HOTKEY_LABELS[id].toLowerCase().includes(filter.toLowerCase()),
+  );
+
+  return (
+    <div>
+      <SectionTitle>Hotkeys</SectionTitle>
+
+      <div className="flex items-center gap-2 mb-4">
+        <div className="relative flex-1">
+          <IcSearch className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 [width:14px] [height:14px] opacity-60" />
+          <Input
+            placeholder="Filter shortcuts…"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="h-8 pl-7 text-[12.5px]"
+          />
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 text-[12px]"
+          onClick={resetAllHotkeys}
+        >
+          <IcRefresh className="[width:13px] [height:13px] mr-1" />
+          Reset all
+        </Button>
+      </div>
+
+      <p className="mb-3 text-[12px] text-muted-foreground">
+        Click a shortcut to record a new key combination. Press{" "}
+        <Kbd className="h-[16px] min-w-[16px] px-1 text-[9px]">Esc</Kbd> to
+        cancel recording.
+      </p>
+
+      <div className="rounded-lg border border-border bg-card/40 px-4">
+        {visible.length === 0 ? (
+          <div className="py-6 text-center text-[12.5px] text-muted-foreground">
+            No matching shortcuts.
+          </div>
+        ) : (
+          visible.map((id) => (
+            <HotkeyRow
+              key={id}
+              id={id}
+              binding={hotkeys[id]}
+              onSave={(b) => setHotkey(id, b)}
+              onReset={() => resetHotkey(id)}
+            />
+          ))
+        )}
+      </div>
     </div>
   );
 }
@@ -647,18 +800,11 @@ function HotkeyRow({
     JSON.stringify(binding) === JSON.stringify(DEFAULT_HOTKEYS[id]);
 
   return (
-    <div
-      className={cn(
-        "flex items-center gap-3 py-[12px]",
-        "border-b border-neutral-200 dark:border-neutral-800 last:border-b-0",
-      )}
-    >
-      {/* Label */}
-      <span className="flex-1 text-[13px] text-neutral-900 dark:text-white">
+    <div className="flex items-center gap-3 py-3 border-b border-border last:border-b-0">
+      <span className="flex-1 text-[13px] text-foreground">
         {HOTKEY_LABELS[id]}
       </span>
 
-      {/* Binding display / recorder */}
       {recording ? (
         <HotkeyRecorder
           onCapture={(b) => {
@@ -673,10 +819,8 @@ function HotkeyRow({
           title="Click to change shortcut"
           onClick={() => setRecording(true)}
           className={cn(
-            "inline-flex items-center gap-1 px-2 py-0.5 rounded-[6px]",
-            "border border-transparent",
-            "hover:border-neutral-300 dark:hover:border-neutral-600",
-            "hover:bg-neutral-100 dark:hover:bg-neutral-800",
+            "inline-flex items-center gap-1 px-2 py-1 rounded-md",
+            "border border-transparent hover:border-border hover:bg-accent/40",
             "transition-colors duration-75 cursor-pointer",
           )}
         >
@@ -688,112 +832,97 @@ function HotkeyRow({
         </button>
       )}
 
-      {/* Reset to default */}
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
         title="Reset to default"
         disabled={isDefault}
         onClick={onReset}
-        className={cn(
-          "text-[11px] px-2 h-[22px] rounded-[5px]",
-          "border border-neutral-200 dark:border-neutral-700",
-          "text-neutral-500 dark:text-neutral-400",
-          "hover:bg-neutral-100 dark:hover:bg-neutral-800 hover:text-neutral-700 dark:hover:text-neutral-200",
-          "transition-colors duration-75",
-          "disabled:opacity-30 disabled:cursor-not-allowed",
-        )}
+        className="h-7 px-2 text-[11px]"
       >
         Reset
-      </button>
+      </Button>
     </div>
   );
 }
 
-function HotkeysBody() {
-  const { hotkeys, setHotkey, resetHotkey, resetAllHotkeys } = useSettingsStore();
-  const [filter, setFilter] = React.useState("");
+/**
+ * Captures the next non-modifier keydown and reports a binding. Esc
+ * cancels without saving. Auto-focuses on mount.
+ */
+function HotkeyRecorder({
+  onCapture,
+  onCancel,
+}: {
+  onCapture: (b: HotkeyBinding) => void;
+  onCancel: () => void;
+}) {
+  const ref = React.useRef<HTMLDivElement>(null);
 
-  const ids = Object.keys(HOTKEY_LABELS) as HotkeyId[];
-  const visible = ids.filter((id) =>
-    filter === "" ||
-    HOTKEY_LABELS[id].toLowerCase().includes(filter.toLowerCase()),
-  );
+  React.useEffect(() => {
+    ref.current?.focus();
+    const el = ref.current;
+    if (!el) return;
+    const handler = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        onCancel();
+        return;
+      }
+      if (["Meta", "Control", "Shift", "Alt"].includes(e.key)) return;
+      onCapture(
+        makeBinding(e.key, {
+          metaKey: e.metaKey,
+          ctrlKey: e.ctrlKey,
+          shiftKey: e.shiftKey,
+          altKey: e.altKey,
+        }),
+      );
+    };
+    el.addEventListener("keydown", handler);
+    return () => el.removeEventListener("keydown", handler);
+  }, [onCapture, onCancel]);
 
   return (
-    <div>
-      <div className="flex items-center gap-2 mb-3">
-        <Input
-          placeholder="Filter shortcuts…"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className={cn("h-8 flex-1 text-[12px] rounded-[6px]")}
-        />
-        <button
-          type="button"
-          onClick={resetAllHotkeys}
-          className={cn(
-            "shrink-0 h-8 px-3 rounded-[6px] text-[12px]",
-            "border border-neutral-200 dark:border-neutral-700",
-            "text-neutral-600 dark:text-neutral-400",
-            "hover:bg-neutral-100 dark:hover:bg-neutral-800",
-            "transition-colors duration-75",
-          )}
-        >
-          Reset all
-        </button>
-      </div>
-      <p className="mb-3 text-[11px] text-neutral-500 dark:text-neutral-500">
-        Click a shortcut to record a new key combination. Press{" "}
-        <Kbd className="h-[16px] min-w-[16px] px-1 text-[9px]">Esc</Kbd> to
-        cancel recording.
-      </p>
-      <Section>
-        {visible.length === 0 ? (
-          <div className="py-6 text-center text-[12px] text-neutral-500">
-            No matching shortcuts.
-          </div>
-        ) : (
-          visible.map((id) => (
-            <HotkeyRow
-              key={id}
-              id={id}
-              binding={hotkeys[id]}
-              onSave={(b) => setHotkey(id, b)}
-              onReset={() => resetHotkey(id)}
-            />
-          ))
-        )}
-      </Section>
+    <div
+      ref={ref}
+      tabIndex={0}
+      className={cn(
+        "inline-flex items-center justify-center h-7 min-w-[120px] px-3 rounded-md",
+        "text-[11.5px] text-muted-foreground",
+        "border border-dashed border-[var(--text-link)] bg-[var(--text-link)]/5",
+        "outline-none focus:ring-1 focus:ring-[var(--text-link)]/60",
+        "cursor-text select-none animate-pulse",
+      )}
+    >
+      Press keys…
     </div>
   );
 }
+
+// ── Coming-soon placeholder ──────────────────────────────────────────
 
 function ComingSoonBody({ section }: { section: Section }) {
   return (
-    <div className="flex items-center justify-center min-h-[480px]">
-      <Empty className="border-0 bg-transparent">
-        <EmptyHeader>
-          <EmptyMedia variant="default" className="bg-transparent size-auto">
-            <DotmSquare3
-              size={28}
-              dotSize={3}
-              aria-label={`${section.label} loading`}
-            />
-          </EmptyMedia>
-          <EmptyTitle className="text-[14px] font-semibold text-neutral-900 dark:text-white">
-            {section.label}
-          </EmptyTitle>
-          <EmptyDescription className="text-[12px] leading-[1.5] max-w-[320px] text-neutral-600 dark:text-neutral-400">
-            This panel is not wired up yet. The lattice port is staged in
-            phases — sections light up as their underlying stores land.
-          </EmptyDescription>
-        </EmptyHeader>
-        <EmptyContent>
-          <p className="text-[11px] text-neutral-500 dark:text-neutral-500">
-            Tip: hit <Kbd className="h-[18px] min-w-[18px] px-1.5 text-[10px]">Esc</Kbd> to close.
-          </p>
-        </EmptyContent>
-      </Empty>
+    <div>
+      <SectionTitle>{section.label}</SectionTitle>
+      <div className="rounded-lg border border-dashed border-border bg-card/30 px-6 py-10 text-center">
+        <section.Icon />
+        <div className="mt-3 text-[13.5px] font-medium text-foreground">
+          {section.label}
+        </div>
+        <p className="mt-1 text-[12px] text-muted-foreground max-w-[420px] mx-auto">
+          This panel is coming in a future release. Track progress in the
+          project plan or pick another section from the sidebar.
+        </p>
+        <div className="mt-4">
+          <Separator className="opacity-50" />
+        </div>
+        <Button variant="outline" size="sm" className="mt-4 text-[12px]" disabled>
+          Notify me when ready
+        </Button>
+      </div>
     </div>
   );
 }

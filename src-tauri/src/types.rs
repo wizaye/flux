@@ -125,6 +125,46 @@ pub struct RenameResult {
     pub files_updated: u32,
 }
 
+/// One entry in the trash bin (`.trash/YYYY-MM/...`).
+///
+/// The `trash_path` is the relative-to-vault path of the file as it
+/// currently lives inside `.trash/`. The `original_path` is the path
+/// the file had before deletion (without the `.trash/YYYY-MM/`
+/// prefix) — that's where `restore_from_trash` puts it back.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashEntry {
+    /// Where the file lives now, relative to the vault root.
+    pub trash_path: String,
+    /// Where it lived before deletion, relative to the vault root.
+    pub original_path: String,
+    /// Display name (last path component).
+    pub name: String,
+    /// File size in bytes.
+    pub size: u64,
+    /// When the file was moved to trash (Unix epoch ms — derived from
+    /// the file's modified time after the rename).
+    pub trashed_at: i64,
+}
+
+/// Lightweight filesystem metadata for a single file or directory.
+/// Returned by `get_file_metadata` — used by the sidebar's hover
+/// tooltip so we don't have to bake created/modified into every
+/// `FileTreeNode` up front.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct FileMetadata {
+    /// File size in bytes. `0` for directories.
+    pub size: u64,
+    /// Created timestamp (Unix epoch ms). Some filesystems don't
+    /// track this and will fall back to `modified_at`.
+    pub created_at: i64,
+    /// Last modified timestamp (Unix epoch ms).
+    pub modified_at: i64,
+    /// True when the path is a directory.
+    pub is_dir: bool,
+}
+
 // ── Errors ────────────────────────────────────────────────────────────────
 
 /// Application-level errors exposed to the frontend.

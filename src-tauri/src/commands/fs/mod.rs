@@ -5,7 +5,7 @@
 
 use crate::db::{self, repo::FileRecord};
 use crate::state::AppState;
-use crate::types::{AppError, EntryType, FileEntry, FileState, FileTreeNode, MoveResult, RenameResult};
+use crate::types::{AppError, EntryType, FileEntry, FileMetadata, FileState, FileTreeNode, MoveResult, RenameResult, TrashEntry};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -69,6 +69,52 @@ pub async fn read_file_binary(
     })?;
 
     Ok(bytes)
+}
+
+/// Return filesystem metadata for a single path: size, created /
+/// modified timestamps (Unix epoch ms), and whether the path is a
+/// directory. Cheap call — used by the sidebar's hover tooltip so
+/// we don't have to bake every metadata field into `FileTreeNode`.
+///
+/// Note: `created` isn't supported on every filesystem (notably some
+/// Linux configurations); when it isn't, we fall back to `modified`
+/// rather than erroring.
+#[tauri::command]
+pub async fn get_file_metadata(
+    path: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<FileMetadata, AppError> {
+    let vault_path = get_vault_path_from_state(&state)?;
+    let file_path = validate_and_resolve_path(&vault_path, &path)?;
+
+    let metadata = tokio::fs::metadata(&file_path).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            AppError::NotFound(path.clone())
+        } else {
+            AppError::Io(e.to_string())
+        }
+    })?;
+
+    let modified_at = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    let created_at = metadata
+        .created()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(modified_at);
+
+    Ok(FileMetadata {
+        size: if metadata.is_dir() { 0 } else { metadata.len() },
+        created_at,
+        modified_at,
+        is_dir: metadata.is_dir(),
+    })
 }
 
 /// Write file contents with atomic write.
@@ -146,6 +192,55 @@ pub async fn write_file(
     Ok(())
 }
 
+/// Write raw bytes to an absolute path outside the vault.
+///
+/// Intended for "Export" flows where the user picked the destination
+/// via the OS save dialog (so the path is implicitly user-consented).
+/// Skips the vault sandboxing and the SQLite index update that
+/// `write_file` performs, because the target file isn't part of the
+/// vault.
+///
+/// We still do basic sanity checks: the path must be absolute and
+/// the parent directory must already exist (the dialog enforces this
+/// — we double-check so a malicious caller can't slip a relative
+/// path through).
+#[tauri::command]
+pub async fn write_external_file(
+    path: String,
+    bytes: Vec<u8>,
+) -> Result<(), AppError> {
+    let target = std::path::PathBuf::from(&path);
+    if !target.is_absolute() {
+        return Err(AppError::InvalidPath(format!(
+            "expected absolute path, got `{}`",
+            path
+        )));
+    }
+    if let Some(parent) = target.parent() {
+        if !parent.exists() {
+            return Err(AppError::NotFound(parent.display().to_string()));
+        }
+    }
+
+    // Atomic write: temp in same dir → fsync → rename. Matches the
+    // safety pattern of `write_file` so a crashed export never
+    // leaves a truncated PDF on disk.
+    let dir = target.parent().unwrap_or(Path::new("."));
+    let stem = target
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "export".into());
+    let temp_path = dir.join(format!(".{}.tmp", stem));
+
+    {
+        let mut temp_file = std::fs::File::create(&temp_path)?;
+        temp_file.write_all(&bytes)?;
+        temp_file.sync_all()?;
+    }
+    std::fs::rename(&temp_path, &target)?;
+    Ok(())
+}
+
 /// Create a new file with initial content.
 ///
 /// Returns an error if the file already exists.
@@ -199,13 +294,20 @@ pub async fn delete_file(
 
     tokio::fs::rename(&file_path, &trash_file_path).await?;
 
-    // Update database state to trashed
+    // Update database state to trashed — best-effort. The DB index is
+    // a derived cache (see PROJECT_PLAN: filesystem is the source of
+    // truth); a missing or stale row must NEVER block a real FS
+    // operation. We log instead of returning so the user gets the
+    // "moved to trash" they asked for.
     let pool = get_db_pool_from_state(&state)?;
-    db::run_blocking(&pool, move |conn| {
-        FileRecord::update_state(conn, &path, FileState::Trashed)
+    let path_for_db = path.clone();
+    if let Err(e) = db::run_blocking(&pool, move |conn| {
+        FileRecord::update_state(conn, &path_for_db, FileState::Trashed)
     })
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    {
+        tracing::warn!("delete_file: DB index update failed (FS op succeeded): {e}");
+    }
 
     Ok(())
 }
@@ -240,14 +342,17 @@ pub async fn move_file(
     // Move the file
     tokio::fs::rename(&src_path, &dst_path).await?;
 
-    // Update database path
+    // Update database path — best-effort (see delete_file note).
     let pool = get_db_pool_from_state(&state)?;
     let dst_clone = dst.clone();
-    db::run_blocking(&pool, move |conn| {
-        FileRecord::update_path(conn, &src, &dst_clone)
+    let src_for_db = src.clone();
+    if let Err(e) = db::run_blocking(&pool, move |conn| {
+        FileRecord::update_path(conn, &src_for_db, &dst_clone)
     })
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    {
+        tracing::warn!("move_file: DB index update failed (FS op succeeded): {e}");
+    }
 
     // TODO: Implement wikilink healing (Feature 20)
     // For now, return zero healed links
@@ -570,6 +675,191 @@ fn build_tree_recursive(
                 modified_at,
             });
         }
+    }
+
+    Ok(())
+}
+
+
+// ── Trash Operations ──────────────────────────────────────────────────────
+
+/// List every file currently in `.trash/`.
+///
+/// Walks `.trash/<YYYY-MM>/` recursively (one level for the month
+/// bucket, then arbitrarily deep for files that were deleted while
+/// nested in folders). The relative path INSIDE the month bucket is
+/// the file's original vault path — that's where `restore_from_trash`
+/// will put it back.
+#[tauri::command]
+pub async fn list_trash(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<TrashEntry>, AppError> {
+    let vault_path = common::get_vault_path_from_state(&state)?;
+    let trash_root = vault_path.join(".trash");
+
+    if !trash_root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries: Vec<TrashEntry> = Vec::new();
+
+    // First level: month buckets (YYYY-MM).
+    let mut month_iter = tokio::fs::read_dir(&trash_root).await?;
+    while let Some(month_entry) = month_iter.next_entry().await? {
+        let month_path = month_entry.path();
+        if !month_path.is_dir() {
+            continue;
+        }
+        // Walk every file under this month bucket.
+        let mut stack = vec![month_path.clone()];
+        while let Some(dir) = stack.pop() {
+            let mut dir_iter = tokio::fs::read_dir(&dir).await?;
+            while let Some(entry) = dir_iter.next_entry().await? {
+                let path = entry.path();
+                let metadata = entry.metadata().await?;
+                if metadata.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                // Path relative to the vault root (what we surface to the UI).
+                let trash_rel = path
+                    .strip_prefix(&vault_path)
+                    .map_err(|_| AppError::Other("Path resolution error".to_string()))?
+                    .to_str()
+                    .ok_or_else(|| AppError::Other("Invalid UTF-8 in path".to_string()))?
+                    .to_string();
+                // Path relative to the month bucket — this is the file's
+                // original location in the vault.
+                let original_rel = path
+                    .strip_prefix(&month_path)
+                    .map_err(|_| AppError::Other("Path resolution error".to_string()))?
+                    .to_str()
+                    .ok_or_else(|| AppError::Other("Invalid UTF-8 in path".to_string()))?
+                    .to_string();
+
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("(unnamed)")
+                    .to_string();
+
+                let trashed_at = metadata
+                    .modified()?
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as i64;
+
+                entries.push(TrashEntry {
+                    trash_path: trash_rel,
+                    original_path: original_rel,
+                    name,
+                    size: metadata.len(),
+                    trashed_at,
+                });
+            }
+        }
+    }
+
+    // Newest first.
+    entries.sort_by(|a, b| b.trashed_at.cmp(&a.trashed_at));
+    Ok(entries)
+}
+
+/// Restore a trashed file to its original location.
+///
+/// `trash_path` must point at a file inside `.trash/`. The file's
+/// `original_path` (the path it had before deletion) is reconstructed
+/// from the part of `trash_path` after the `YYYY-MM/` bucket prefix.
+/// If `original_path` already exists, the restore fails — callers
+/// should rename or delete the colliding file first.
+#[tauri::command]
+pub async fn restore_from_trash(
+    trash_path: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, AppError> {
+    let vault_path = common::get_vault_path_from_state(&state)?;
+    let trashed_file = common::validate_and_resolve_path(&vault_path, &trash_path)?;
+
+    if !trashed_file.exists() {
+        return Err(AppError::NotFound(trash_path));
+    }
+
+    // Derive the original vault-relative path: strip the leading
+    // `.trash/YYYY-MM/` prefix.
+    let trash_rel = trashed_file
+        .strip_prefix(&vault_path)
+        .map_err(|_| AppError::InvalidPath("Path outside vault".to_string()))?;
+    let mut components = trash_rel.components();
+    let dot_trash = components.next();
+    if dot_trash.and_then(|c| c.as_os_str().to_str()) != Some(".trash") {
+        return Err(AppError::InvalidPath(
+            "Path is not inside .trash/".to_string(),
+        ));
+    }
+    // Skip the YYYY-MM month bucket.
+    components.next();
+    let original_rel: std::path::PathBuf = components.collect();
+    if original_rel.as_os_str().is_empty() {
+        return Err(AppError::InvalidPath(
+            "Cannot determine original path".to_string(),
+        ));
+    }
+    let destination = vault_path.join(&original_rel);
+
+    if destination.exists() {
+        return Err(AppError::AlreadyExists(
+            original_rel.to_string_lossy().to_string(),
+        ));
+    }
+
+    if let Some(parent) = destination.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    tokio::fs::rename(&trashed_file, &destination).await?;
+
+    let original_path_str = original_rel
+        .to_str()
+        .ok_or_else(|| AppError::Other("Invalid UTF-8 in path".to_string()))?
+        .to_string();
+
+    // Flip the file's DB state back to Active.
+    let pool = common::get_db_pool_from_state(&state)?;
+    let original_for_db = original_path_str.clone();
+    let _ = db::run_blocking(&pool, move |conn| {
+        FileRecord::update_state(conn, &original_for_db, FileState::Active)
+    })
+    .await;
+
+    Ok(original_path_str)
+}
+
+/// Permanently delete a file from `.trash/` (no recovery possible).
+#[tauri::command]
+pub async fn purge_trash_entry(
+    trash_path: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<(), AppError> {
+    let vault_path = common::get_vault_path_from_state(&state)?;
+    let trashed_file = common::validate_and_resolve_path(&vault_path, &trash_path)?;
+
+    if !trashed_file.exists() {
+        return Err(AppError::NotFound(trash_path));
+    }
+    // Only allow purging files that actually live inside .trash/.
+    let rel = trashed_file
+        .strip_prefix(&vault_path)
+        .map_err(|_| AppError::InvalidPath("Path outside vault".to_string()))?;
+    if !rel.starts_with(".trash") {
+        return Err(AppError::InvalidPath(
+            "Path is not inside .trash/".to_string(),
+        ));
+    }
+
+    if trashed_file.is_dir() {
+        tokio::fs::remove_dir_all(&trashed_file).await?;
+    } else {
+        tokio::fs::remove_file(&trashed_file).await?;
     }
 
     Ok(())

@@ -3,7 +3,6 @@ import { cn } from "@/lib/utils";
 import { IconButton } from "@/components/flux-ui/common/icon-button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
-  IcArchive,
   IcLink,
   IcLinkOff,
   IcList,
@@ -36,7 +35,7 @@ import { HEADER_H, WIN_CONTROLS_W } from "@/lib/layout-constants";
  * spilling into the reserved win-controls padding.
  */
 
-export type RightView = "links" | "outgoing" | "tags" | "saved" | "outline";
+export type RightView = "links" | "outgoing" | "tags" | "outline";
 
 interface RightSidebarProps {
   view: RightView;
@@ -48,7 +47,6 @@ const HEADER_TABS: Array<{ id: RightView; label: string; Icon: React.ComponentTy
   { id: "links", label: "Backlinks", Icon: IcLink },
   { id: "outgoing", label: "Outgoing Links", Icon: IcLinkOff },
   { id: "tags", label: "Tags", Icon: IcTag },
-  { id: "saved", label: "Saved", Icon: IcArchive },
   { id: "outline", label: "Outline", Icon: IcList },
 ];
 
@@ -127,11 +125,6 @@ function Body({ view }: { view: RightView }) {
             <Empty label="No tags." />
           </Section>
         )}
-        {view === "saved" && (
-          <Section title="Saved">
-            <Empty label="No saved items." />
-          </Section>
-        )}
         {view === "outline" && (
           <Section title="Outline">
             <Empty label="No outline." />
@@ -198,3 +191,10 @@ function Empty({ label }: { label: string }) {
     </p>
   );
 }
+
+/**
+ * Bookmarks panel was previously here, mirrored from the left-
+ * sidebar. Removed because Obsidian keeps bookmarks exclusively in
+ * the left sidebar — duplicating it on the right caused confusion
+ * about where the canonical bookmark list lives.
+ */

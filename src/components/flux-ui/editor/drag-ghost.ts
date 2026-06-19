@@ -1,7 +1,7 @@
 /**
  * Custom drag image — the floating chip rendered below + right of the
- * cursor while a tab is being dragged. Replaces the browser's default
- * washed-out copy of the source element.
+ * cursor while a tab / file is being dragged. Replaces the browser's
+ * default washed-out copy of the source element.
  *
  * Ported from `lattice/src/components/common/dragGhost.ts`. The
  * positioning trick: setDragImage anchors the cursor at (0, 0) of the
@@ -13,13 +13,36 @@
  * after one animation frame (the browser has already captured the
  * bitmap by that point).
  */
+
+export type DragGhostOptions = {
+  /** Optional Lucide-style inline SVG to prepend before the label. */
+  iconSvg?: string;
+  /** Override the chip's background. Defaults to a dark-mode-friendly
+   *  surface — but the file-tree caller passes a theme-aware tone. */
+  background?: string;
+  /** Override text colour. */
+  color?: string;
+};
+
 export function setDragImageBelowCursor(
   e: React.DragEvent | DragEvent,
   label: string,
+  options: DragGhostOptions = {},
 ): void {
   if (typeof document === "undefined") return;
   const dt = (e as DragEvent).dataTransfer;
   if (!dt) return;
+
+  const isDark =
+    typeof document !== "undefined" &&
+    document.documentElement.classList.contains("dark");
+  const background = options.background
+    ?? (isDark ? "#2b2b2b" : "#ffffff");
+  const color = options.color
+    ?? (isDark ? "#dcddde" : "#1f1f1f");
+  const border = isDark
+    ? "1px solid rgba(255,255,255,0.12)"
+    : "1px solid rgba(0,0,0,0.10)";
 
   const wrap = document.createElement("div");
   wrap.style.cssText = [
@@ -32,23 +55,50 @@ export function setDragImageBelowCursor(
   ].join(";");
 
   const chip = document.createElement("div");
-  chip.textContent = label;
   chip.style.cssText = [
     "display:inline-flex",
     "align-items:center",
-    "padding:5px 10px",
-    "background:#2b2b2b",
-    "border:1px solid rgba(255,255,255,0.12)",
-    "border-radius:6px",
-    "box-shadow:0 4px 14px rgba(0,0,0,0.35)",
+    "gap:6px",
+    "padding:4px 10px",
+    `background:${background}`,
+    `border:${border}`,
+    "border-radius:9999px",
+    "box-shadow:0 6px 18px rgba(0,0,0,0.28)",
     "font-size:12px",
-    "color:#dcddde",
+    "font-weight:500",
+    `color:${color}`,
     "white-space:nowrap",
     "max-width:280px",
     "overflow:hidden",
     "text-overflow:ellipsis",
     "font-family:'Public Sans Variable',sans-serif",
+    "line-height:1",
   ].join(";");
+
+  if (options.iconSvg) {
+    const iconWrap = document.createElement("span");
+    iconWrap.style.cssText = [
+      "display:inline-flex",
+      "align-items:center",
+      "width:14px",
+      "height:14px",
+      "flex-shrink:0",
+      `color:${color}`,
+      "opacity:0.8",
+    ].join(";");
+    iconWrap.innerHTML = options.iconSvg;
+    chip.appendChild(iconWrap);
+  }
+
+  const text = document.createElement("span");
+  text.textContent = label;
+  text.style.cssText = [
+    "overflow:hidden",
+    "text-overflow:ellipsis",
+    "white-space:nowrap",
+    "max-width:240px",
+  ].join(";");
+  chip.appendChild(text);
 
   wrap.appendChild(chip);
   document.body.appendChild(wrap);

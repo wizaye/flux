@@ -24,6 +24,8 @@ type Props = {
   onToggleReading: () => void;
   /** Switch the active tab to Reveal.js slides view. */
   onSetSlides: () => void;
+  /** Switch the active tab to live-preview (CodeMirror with rendered widgets). */
+  onSetLive: () => void;
   onRename: () => void;
   onCopyPath: () => void;
   onShowInExplorer: () => void;
@@ -35,6 +37,28 @@ type Props = {
   topRightInsetPx?: number;
   /** True when the column-width transition is currently disabled (drag). */
   dragging?: boolean;
+
+  // ── Optional extended commands — forwarded as-is to the overflow
+  // menu. Pane.tsx fills these in from `paneActions`. ──
+  isBookmarked?: boolean;
+  onSetSource?: () => void;
+  onSplitRight?: () => void;
+  onSplitDown?: () => void;
+  onOpenInNewWindow?: () => void;
+  onMoveTo?: () => void;
+  onToggleBookmark?: () => void;
+  onMerge?: () => void;
+  onAddProperty?: () => void;
+  onExportPdf?: () => void;
+  onFind?: () => void;
+  onReplace?: () => void;
+  onVersionHistory?: () => void;
+  onOpenLocalGraph?: () => void;
+  onOpenBacklinks?: () => void;
+  onOpenOutgoingLinks?: () => void;
+  onOpenFileProperties?: () => void;
+  onOpenOutline?: () => void;
+  onOpenInDefaultApp?: () => void;
 };
 
 export function PaneDocHeader({
@@ -42,6 +66,7 @@ export function PaneDocHeader({
   onSplit,
   onToggleReading,
   onSetSlides,
+  onSetLive,
   onRename,
   onCopyPath,
   onShowInExplorer,
@@ -49,6 +74,25 @@ export function PaneDocHeader({
   onDelete,
   topRightInsetPx = 0,
   dragging = false,
+  isBookmarked,
+  onSetSource,
+  onSplitRight,
+  onSplitDown,
+  onOpenInNewWindow,
+  onMoveTo,
+  onToggleBookmark,
+  onMerge,
+  onAddProperty,
+  onExportPdf,
+  onFind,
+  onReplace,
+  onVersionHistory,
+  onOpenLocalGraph,
+  onOpenBacklinks,
+  onOpenOutgoingLinks,
+  onOpenFileProperties,
+  onOpenOutline,
+  onOpenInDefaultApp,
 }: Props) {
   const reading = tab?.viewMode === "preview";
   const title = tab?.title || "Untitled";
@@ -108,13 +152,35 @@ export function PaneDocHeader({
         </IconButton>
         <DocMoreMenu
           viewMode={tab?.viewMode}
+          isBookmarked={isBookmarked}
           onToggleReading={onToggleReading}
-          onSetSource={() => {
-            if (reading) onToggleReading();
-          }}
+          onSetSource={
+            onSetSource ??
+            (() => {
+              if (reading) onToggleReading();
+            })
+          }
+          onSetLive={onSetLive}
           onSetSlides={onSetSlides}
+          onSplitRight={onSplitRight}
+          onSplitDown={onSplitDown}
+          onOpenInNewWindow={onOpenInNewWindow}
           onRename={onRename}
+          onMoveTo={onMoveTo}
+          onToggleBookmark={onToggleBookmark}
+          onMerge={onMerge}
+          onAddProperty={onAddProperty}
+          onExportPdf={onExportPdf}
+          onFind={onFind}
+          onReplace={onReplace}
           onCopyPath={onCopyPath}
+          onVersionHistory={onVersionHistory}
+          onOpenLocalGraph={onOpenLocalGraph}
+          onOpenBacklinks={onOpenBacklinks}
+          onOpenOutgoingLinks={onOpenOutgoingLinks}
+          onOpenFileProperties={onOpenFileProperties}
+          onOpenOutline={onOpenOutline}
+          onOpenInDefaultApp={onOpenInDefaultApp}
           onShowInExplorer={onShowInExplorer}
           onRevealInNav={onRevealInNav}
           onDelete={onDelete}

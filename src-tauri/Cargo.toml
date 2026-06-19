@@ -54,6 +54,10 @@ uuid = { version = "1", features = ["v4", "v7", "serde"] }
 blake3 = "1"
 chrono = { version = "0.4", features = ["serde"] }
 
+# ── PDF export (native, zero-bundle: uses the 14 built-in PDF fonts) ──────
+pulldown-cmark = "0.10"
+printpdf = "0.7"
+
 [dev-dependencies]
 tempfile = "3"
 tokio-test = "0.4"

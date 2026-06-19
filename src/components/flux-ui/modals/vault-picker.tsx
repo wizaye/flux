@@ -42,7 +42,6 @@ export function VaultPicker({ open, onClose }: VaultPickerProps) {
       });
       
       if (selected) {
-        console.log('[VaultPicker] Selected path:', selected);
         setSelectedPath(selected);
         
         // Auto-populate vault name from folder name
@@ -67,7 +66,6 @@ export function VaultPicker({ open, onClose }: VaultPickerProps) {
     
     setLoading(true);
     try {
-      console.log('[VaultPicker] Opening vault at:', selectedPath);
       await openVault(selectedPath);
       onClose?.();
     } catch (error) {
@@ -95,7 +93,7 @@ export function VaultPicker({ open, onClose }: VaultPickerProps) {
     try {
       // Create full path: selectedPath/vaultName
       const fullPath = `${selectedPath}${selectedPath.endsWith('/') || selectedPath.endsWith('\\\\') ? '' : '/'}${vaultName}`;
-      console.log('[VaultPicker] Creating vault at:', fullPath);
+
       await createVault(fullPath);
       onClose?.();
     } catch (error) {

@@ -1,7 +1,35 @@
 // TypeScript bindings for Flux Tauri commands
 // This file provides type-safe access to the backend API
 
-import { invoke } from '@tauri-apps/api/core';
+import { invoke as tauriInvoke } from '@tauri-apps/api/core';
+
+/**
+ * Detect whether we're running inside the Tauri webview. `false` when
+ * the bundle is loaded by a plain browser (Vite dev preview, Playwright
+ * tests, future web build). Bindings short-circuit to a rejected
+ * promise so the UI can fall through to mock-vault / no-op flows
+ * instead of throwing the "Cannot read properties of undefined
+ * (reading 'invoke')" runtime error from `@tauri-apps/api/core`.
+ */
+export const isTauri: boolean =
+  typeof window !== 'undefined' &&
+  // Tauri 2 injects this internal namespace on the window before any
+  // app code runs.
+  ((window as unknown as { __TAURI_INTERNALS__?: unknown })
+    .__TAURI_INTERNALS__ !== undefined ||
+    (window as unknown as { __TAURI__?: unknown }).__TAURI__ !== undefined);
+
+async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (!isTauri) {
+    return Promise.reject(
+      new Error(
+        `[flux] Tauri command "${cmd}" called outside the Tauri runtime — ` +
+          `running in browser preview mode. Set up a mock if you need this in the browser.`,
+      ),
+    );
+  }
+  return tauriInvoke<T>(cmd, args);
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -17,10 +45,11 @@ export type FileState = 'active' | 'archived' | 'trashed';
 export interface FileEntry {
   path: string;
   name: string;
-  entry_type: 'file' | 'directory';
-  state: FileState;
-  size: number;
-  modified_at: number;
+  // Rust serializes as `type` (explicit serde rename on the Rust struct).
+  type: 'file' | 'directory';
+  state: FileState | null;
+  size: number | null;
+  modifiedAt: number;
 }
 
 export interface FileTreeNode {
@@ -37,15 +66,25 @@ export interface FileTreeNode {
 }
 
 export interface MoveResult {
-  new_path: string;
-  links_healed: number;
-  files_updated: number;
+  // Rust struct uses `#[serde(rename_all = "camelCase")]` — these
+  // MUST match the JSON wire format, not the Rust field names.
+  newPath: string;
+  linksHealed: number;
+  filesUpdated: number;
 }
 
 export interface RenameResult {
-  new_path: string;
-  links_healed: number;
-  files_updated: number;
+  newPath: string;
+  linksHealed: number;
+  filesUpdated: number;
+}
+
+export interface TrashEntry {
+  trashPath: string;
+  originalPath: string;
+  name: string;
+  size: number;
+  trashedAt: number;
 }
 
 // ── Vault Commands ────────────────────────────────────────────────────────
@@ -66,6 +105,15 @@ export async function getVaultInfo(): Promise<VaultHandle> {
   return await invoke('get_vault_info');
 }
 
+/**
+ * Returns the path of the most-recently-opened vault, or null if
+ * nothing has been opened yet (or the previously-opened path no
+ * longer exists on disk). The backend cleans up stale pointers.
+ */
+export async function getLastVaultPath(): Promise<string | null> {
+  return await invoke('get_last_vault_path');
+}
+
 // ── File System Commands ──────────────────────────────────────────────────
 
 export async function readFile(path: string): Promise<string> {
@@ -80,8 +128,50 @@ export async function readFileBinary(path: string): Promise<Uint8Array> {
   return raw instanceof Uint8Array ? raw : new Uint8Array(raw);
 }
 
+export interface FileMetadata {
+  size: number;
+  createdAt: number;
+  modifiedAt: number;
+  isDir: boolean;
+}
+
+export async function getFileMetadata(path: string): Promise<FileMetadata> {
+  return await invoke('get_file_metadata', { path });
+}
+
 export async function writeFile(path: string, content: string): Promise<void> {
   return await invoke('write_file', { path, content });
+}
+
+/** Write raw bytes to an absolute path *outside* the vault.
+ *  Use for export flows where the user picked the destination via
+ *  the OS save dialog. The Rust side validates the path is absolute
+ *  and the parent directory exists. */
+export async function writeExternalFile(
+  path: string,
+  bytes: Uint8Array,
+): Promise<void> {
+  // Tauri serializes a Uint8Array as `number[]` over the wire.
+  return await invoke('write_external_file', {
+    path,
+    bytes: Array.from(bytes),
+  });
+}
+
+/** Native Markdown → PDF export. Parses + lays out the document
+ *  entirely in Rust using `pulldown-cmark` + `printpdf` with the 14
+ *  PDF built-in fonts (no font bundling). Output goes straight to
+ *  `outputPath`. */
+export async function exportMarkdownToPdf(
+  title: string,
+  markdown: string,
+  outputPath: string,
+): Promise<void> {
+  return await invoke('export_markdown_to_pdf', {
+    title,
+    markdown,
+    outputPath,
+  });
 }
 
 export async function createFile(path: string, content: string): Promise<void> {
@@ -110,6 +200,20 @@ export async function listDirectory(path: string): Promise<FileEntry[]> {
 
 export async function getFileTree(): Promise<FileTreeNode[]> {
   return await invoke('get_file_tree');
+}
+
+// ── Trash Commands ───────────────────────────────────────────────────────
+
+export async function listTrash(): Promise<TrashEntry[]> {
+  return await invoke('list_trash');
+}
+
+export async function restoreFromTrash(trashPath: string): Promise<string> {
+  return await invoke('restore_from_trash', { trashPath });
+}
+
+export async function purgeTrashEntry(trashPath: string): Promise<void> {
+  return await invoke('purge_trash_entry', { trashPath });
 }
 
 // ── Test Command ──────────────────────────────────────────────────────────

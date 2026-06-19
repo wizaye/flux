@@ -27,10 +27,13 @@ pub fn run() {
             commands::vault::create_vault,
             commands::vault::close_vault,
             commands::vault::get_vault_info,
+            commands::vault::get_last_vault_path,
             // File system commands
             commands::fs::read_file,
             commands::fs::read_file_binary,
+            commands::fs::get_file_metadata,
             commands::fs::write_file,
+            commands::fs::write_external_file,
             commands::fs::create_file,
             commands::fs::delete_file,
             commands::fs::move_file,
@@ -38,6 +41,11 @@ pub fn run() {
             commands::fs::create_directory,
             commands::fs::list_directory,
             commands::fs::get_file_tree,
+            commands::fs::list_trash,
+            commands::fs::restore_from_trash,
+            commands::fs::purge_trash_entry,
+            // Export
+            commands::export::export_markdown_to_pdf,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

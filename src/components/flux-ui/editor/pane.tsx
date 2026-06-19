@@ -34,7 +34,19 @@ import { GraphView } from "./views/graph-view";
 import type { EditorViewProps, PaneActions } from "./views/types";
 import { useEditorStore } from "@/state/editor-store";
 import { useVaultStore } from "@/state/vault-store";
+import { useSettingsStore } from "@/state/settings-store";
+import { useBookmarksStore } from "@/state/bookmarks-store";
+import { useTabSyncStore } from "@/state/tab-sync-store";
 import { useFileOperations } from "@/hooks/use-file-operations";
+import {
+  showInSystemExplorer,
+  openInDefaultApp,
+  revealInNavigation,
+  focusRightView,
+  openInNewWindow,
+  showVersionHistoryComingSoon,
+} from "@/lib/doc-actions";
+import { toast } from "sonner";
 
 /**
  * A single editor pane: tabbar (with sidebar-toggle insets) + doc-header
@@ -119,6 +131,28 @@ export function Pane(props: PaneProps) {
 
   const activeTab = leaf.tabs.find((t) => t.id === leaf.activeTabId) ?? null;
   const isActiveLeaf = activeLeafId === leaf.id;
+
+  // Bookmark state for the active tab — subscribed so the doc-header
+  // ⋯-menu label flips between "Bookmark…" and "Remove bookmark"
+  // without an extra re-render hop.
+  const activeFileId = activeTab?.fileId ?? null;
+  const bookmarkedEntries = useBookmarksStore((s) => s.entries);
+  const isActiveBookmarked = !!(
+    activeFileId && bookmarkedEntries.some((e) => e.id === activeFileId)
+  );
+
+  // Publish the focused tab into the tab-sync store so other panels
+  // (Bookmarks add-button, future linked views) can target whichever
+  // file is currently active without prop-drilling. Cleared on
+  // pane-blur via the activeLeafId check.
+  React.useEffect(() => {
+    if (!isActiveLeaf) return;
+    const id = activeTab?.fileId ?? null;
+    const title = activeTab?.title ?? null;
+    if (id && title) {
+      useTabSyncStore.getState().setActiveFile({ fileId: id, title });
+    }
+  }, [isActiveLeaf, activeTab?.fileId, activeTab?.title]);
 
   // ── drag-tracking state ──────────────────────────────────────────
   // We track the drop-edge with refs (mutated inside dragover) and
@@ -269,13 +303,18 @@ export function Pane(props: PaneProps) {
         t.id === tabId
           ? {
               ...t,
-              viewMode: t.viewMode === "preview" ? "source" : "preview",
+              // Eye-icon toggle: cycle reading ↔ live (NOT raw source).
+              // Live preview is the default editing surface so the
+              // round-trip back from reading lands somewhere useful.
+              // Users who want raw markdown reach Source mode via the
+              // ⋯ menu explicitly.
+              viewMode: t.viewMode === "preview" ? "live" : "preview",
             }
           : t,
       ),
     }));
   };
-  const setViewMode = (tabId: string, mode: "source" | "preview" | "slides") => {
+  const setViewMode = (tabId: string, mode: "source" | "live" | "preview" | "slides") => {
     onMutateLeaf(leaf.id, (l) => ({
       ...l,
       tabs: l.tabs.map((t) => (t.id === tabId ? { ...t, viewMode: mode } : t)),
@@ -515,13 +554,103 @@ export function Pane(props: PaneProps) {
           vault={vault}
           paneActions={{
             onSplit: (edge) => onSplitLeaf(leaf.id, edge),
+            onSplitRight: () => onSplitLeaf(leaf.id, "right"),
+            onSplitDown: () => onSplitLeaf(leaf.id, "bottom"),
             onToggleReading: () => activeTab && toggleReading(activeTab.id),
             onSetSlides: () => activeTab && setViewMode(activeTab.id, "slides"),
+            onSetLive: () => activeTab && setViewMode(activeTab.id, "live"),
+            onSetSource: () => activeTab && setViewMode(activeTab.id, "source"),
             onRename: () => { /* stub — vault rename lands later */ },
             onCopyPath: () => activeTab && copyToClipboard(activeTab.fileId ?? ""),
-            onShowInExplorer: () => { /* stub — Tauri FS reveal lands later */ },
-            onRevealInNav: () => { /* stub — left-sidebar reveal lands later */ },
+            onShowInExplorer: () => {
+              if (activeTab?.fileId) void showInSystemExplorer(activeTab.fileId);
+            },
+            onOpenInDefaultApp: () => {
+              if (activeTab?.fileId) void openInDefaultApp(activeTab.fileId);
+            },
+            onRevealInNav: () => {
+              if (activeTab?.fileId) revealInNavigation(activeTab.fileId);
+            },
             onDelete: () => activeTab && closeTab(activeTab.id),
+
+            // ── New menu commands ──
+            onOpenInNewWindow: () => {
+              if (!activeTab?.fileId) return;
+              const node = vault.get(activeTab.fileId);
+              if (node) void openInNewWindow(node);
+            },
+            onToggleBookmark: () => {
+              if (!activeTab?.fileId) return;
+              // Already bookmarked → straight remove. Otherwise pop the
+              // Add-bookmark dialog so the user can pick a title + group.
+              if (isActiveBookmarked) {
+                useBookmarksStore.getState().remove(activeTab.fileId);
+                toast.success("Bookmark removed", { description: activeTab.fileId });
+                return;
+              }
+              window.dispatchEvent(
+                new CustomEvent("flux-edit-bookmark", {
+                  detail: { fileId: activeTab.fileId, title: activeTab.title },
+                }),
+              );
+            },
+            isBookmarked: isActiveBookmarked,
+            onMoveTo: () => {
+              window.dispatchEvent(
+                new CustomEvent("flux-move-file", {
+                  detail: { fileId: activeTab?.fileId },
+                }),
+              );
+            },
+            onMerge: () => {
+              window.dispatchEvent(
+                new CustomEvent("flux-merge-file", {
+                  detail: { fileId: activeTab?.fileId },
+                }),
+              );
+            },
+            onAddProperty: () => {
+              window.dispatchEvent(
+                new CustomEvent("flux-edit-frontmatter", {
+                  detail: { fileId: activeTab?.fileId },
+                }),
+              );
+            },
+            onExportPdf: () => {
+              if (!activeTab?.fileId) return;
+              window.dispatchEvent(
+                new CustomEvent("flux-export-pdf", {
+                  detail: { fileId: activeTab.fileId },
+                }),
+              );
+            },
+            onFind: () => {
+              window.dispatchEvent(
+                new CustomEvent("flux-editor-find", {
+                  detail: { fileId: activeTab?.fileId, replace: false },
+                }),
+              );
+            },
+            onReplace: () => {
+              window.dispatchEvent(
+                new CustomEvent("flux-editor-find", {
+                  detail: { fileId: activeTab?.fileId, replace: true },
+                }),
+              );
+            },
+            onVersionHistory: showVersionHistoryComingSoon,
+            onOpenLocalGraph: () => focusRightView("links"),
+            onOpenBacklinks: () => focusRightView("links"),
+            onOpenOutgoingLinks: () => focusRightView("outgoing"),
+            onOpenFileProperties: () => {
+              window.dispatchEvent(
+                new CustomEvent("flux-edit-frontmatter", {
+                  detail: { fileId: activeTab?.fileId },
+                }),
+              );
+            },
+            onOpenOutline: () => focusRightView("outline"),
+
             // The doc-header sits BELOW the 36px-tall window controls
             // cluster (which lives in the tabbar row above). So Split /
             // Reading-view / More-options are free to slide all the
@@ -572,6 +701,10 @@ function PaneBody({
   const markDirty = useEditorStore((s) => s.markDirty);
   const markClean = useEditorStore((s) => s.markClean);
   const { openFile, saveFile } = useFileOperations();
+  // User-preferred default view mode for newly-opened markdown
+  // files (also read here so Rules of Hooks aren't violated by
+  // calling `useSettingsStore` after a conditional return below).
+  const defaultViewMode = useSettingsStore((s) => s.defaultViewMode);
 
   // Lazy-load content from disk when a real-vault file is opened in
   // this pane and we haven't cached it yet. Mock-vault FileNodes
@@ -657,9 +790,12 @@ function PaneBody({
   if (file.kind === "pdf") return <PdfView {...baseProps} />;
 
   // Markdown surfaces (file + canvas treated as text for now).
-  const mode = tab.viewMode ?? "source";
+  // Default view mode comes from user settings; falls back to "live"
+  // (Obsidian-style WYSIWYG with cursor-aware markup reveal).
+  const mode = tab.viewMode ?? defaultViewMode ?? "live";
   if (mode === "preview") return <MarkdownPreview {...baseProps} />;
   if (mode === "slides") return <SlidesView {...baseProps} />;
+  if (mode === "live") return <CodeMirrorEditor {...baseProps} livePreview />;
   return <CodeMirrorEditor {...baseProps} />;
 }
 
