@@ -204,8 +204,13 @@ export async function exportToPdf(
   // ── Native Tauri path ─────────────────────────────────────────────
   if (isTauri && savePath) {
     const { exportMarkdownToPdf } = await import("@/bindings");
+    const { withBusy } = await import("@/state/busy-store");
     const title = options.filename || file.name.replace(/\.md$/i, "");
-    await exportMarkdownToPdf(title, md, savePath);
+    await withBusy(
+      `Exporting ${title}.pdf\u2026`,
+      () => exportMarkdownToPdf(title, md, savePath),
+      savePath,
+    );
     return;
   }
 

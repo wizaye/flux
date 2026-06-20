@@ -18,6 +18,7 @@ import {
   TableWidget,
   TaskCheckboxWidget,
   WikilinkWidget,
+  WorkItemWidget,
 } from "./widgets";
 
 /**
@@ -182,14 +183,19 @@ function visitNode(
     return;
   }
 
-  // ── Links: render `[label](url)` as just the label, blue + click ─
+  // ── Links: render `[label](url)` as just the label, blue + click.
+  //    Special-case `flux-wi://…` URLs as a kanban work-item chip
+  //    so they read as a structured pointer (different from a
+  //    regular external/relative link). ─────────────────────────
   if (name === "Link") {
     if (selectionTouches(state, from, to)) return;
     const labelStart = from + 1; // after "["
     let labelEnd = to;
     let urlEnd = to;
+    let urlStart = to;
     let child = node.node.firstChild;
     let bracketDepth = 0;
+    let seenOpenParen = false;
     while (child) {
       if (child.name === "LinkMark") {
         const ch = state.doc.sliceString(child.from, child.to);
@@ -197,9 +203,22 @@ function visitNode(
         else if (ch === "]" && bracketDepth > 0) {
           bracketDepth--;
           if (bracketDepth === 0) labelEnd = child.from;
+        } else if (ch === "(" && !seenOpenParen) {
+          seenOpenParen = true;
+          urlStart = child.to;
         } else if (ch === ")") urlEnd = child.to;
       }
       child = child.nextSibling;
+    }
+    const url = state.doc.sliceString(urlStart, urlEnd - 1).trim();
+    if (url.startsWith("flux-wi://")) {
+      const label = state.doc.sliceString(labelStart, labelEnd);
+      out.push(
+        Decoration.replace({
+          widget: new WorkItemWidget(url, label),
+        }).range(from, to),
+      );
+      return;
     }
     out.push(Decoration.replace({}).range(from, labelStart));
     out.push(Decoration.mark({ class: "cm-lp-link" }).range(labelStart, labelEnd));

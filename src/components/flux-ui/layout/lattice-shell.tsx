@@ -140,7 +140,7 @@ function readEnum<T extends string>(
   }
 }
 
-const LEFT_VIEWS = ["files", "search", "bookmarks", "changes", "calendar", "canvas"] as const;
+const LEFT_VIEWS = ["files", "search", "bookmarks", "changes", "calendar"] as const;
 const RIGHT_VIEWS = ["links", "outgoing", "tags", "outline"] as const;
 
 // ── Editor-tree persistence helpers ─────────────────────────────────
@@ -207,6 +207,11 @@ function shortName(id: string): string {
   return name.replace(/\.md$/i, "");
 }
 
+/** Synthetic vault id for the Graph view. Namespaced with `__flux__`
+ *  so it can never collide with a real on-disk path. Injected into
+ *  the vault map by every shell instance — see `vaultMap` memo. */
+const SYNTHETIC_GRAPH_ID = "__flux__/graph";
+
 export function LatticeShell() {
   const isMac = React.useMemo(detectIsMac, []);
   
@@ -240,6 +245,13 @@ export function LatticeShell() {
   const [rightView, setRightView] = React.useState<RightView>(() =>
     readEnum(LS_KEYS.rightView, RIGHT_VIEWS, "links"),
   );
+  // When set, the left sidebar shows a plugin's contributed panel
+  // INSTEAD of the built-in view (Files / Search / Bookmarks).
+  // Cleared by clicking any built-in view tab — `routeLeftView`
+  // does this implicitly because it changes `leftView`.
+  const [activePluginPanel, setActivePluginPanel] = React.useState<
+    string | null
+  >(null);
 
   // Doc-menu "Open linked view" submenu → focus a specific right-
   // sidebar tab. Decoupled via window events so the doc-header
@@ -300,9 +312,23 @@ export function LatticeShell() {
   // with `MOCK_VAULT_TREE` above. This unifies real-vs-mock data
   // flow so mutations are visible everywhere without per-component
   // branching.
+  //
+  // We also inject a synthetic `/graph` node so the activity-strip
+  // graph action opens a graph tab in every vault, not just the
+  // mock vault (which had it hard-coded). The id is namespaced with
+  // `__flux__/` so it can never collide with a real on-disk path.
   const vaultMap: Map<string, FileNode> = React.useMemo(() => {
-    if (fileTree.length > 0) return flattenVault(fileTree);
-    return MOCK_VAULT;
+    const base =
+      fileTree.length > 0 ? flattenVault(fileTree) : new Map(MOCK_VAULT);
+    if (!base.has(SYNTHETIC_GRAPH_ID)) {
+      base.set(SYNTHETIC_GRAPH_ID, {
+        id: SYNTHETIC_GRAPH_ID,
+        name: "Graph",
+        kind: "graph",
+        content: "",
+      });
+    }
+    return base;
   }, [fileTree]);
 
   const handleTreeChange = React.useCallback((next: SplitTree | null) => {
@@ -370,6 +396,7 @@ export function LatticeShell() {
       // either "NotFound" (for the synthetic graph) or "stream did not
       // contain valid UTF-8" (for binary content). Those views fetch
       // their own bytes inside the view body.
+      if (fileId === SYNTHETIC_GRAPH_ID) return;
       const lower = fileName.toLowerCase();
       const isBinary =
         lower.endsWith('.pdf') ||
@@ -889,6 +916,9 @@ export function LatticeShell() {
   // ── View routing from the activity strip ─────────────────────────
   const routeLeftView = React.useCallback(
     (next: LeftView) => {
+      // Switching to a built-in view also clears any active plugin
+      // sidebar panel so the user sees what they clicked.
+      setActivePluginPanel(null);
       const sameView = next === leftView;
       if (sameView) {
         // re-click active → toggle collapse
@@ -902,6 +932,25 @@ export function LatticeShell() {
       }
     },
     [leftView, toggleLeftSidebar],
+  );
+
+  // Clicking a plugin's activity-bar icon swaps the sidebar to that
+  // plugin's `sidebarPanel` (e.g. Kanban's boards explorer). Same
+  // toggle semantics as `routeLeftView`: re-clicking the active
+  // plugin icon collapses the sidebar.
+  const togglePluginPanel = React.useCallback(
+    (pluginId: string) => {
+      if (activePluginPanel === pluginId) {
+        toggleLeftSidebar();
+        return;
+      }
+      setActivePluginPanel(pluginId);
+      if (leftCollapsedRef.current) {
+        setLeftTransitioning(true);
+        setLeftCollapsed(false);
+      }
+    },
+    [activePluginPanel, toggleLeftSidebar],
   );
 
   // ── Drag-resize math ─────────────────────────────────────────────
@@ -1026,12 +1075,25 @@ export function LatticeShell() {
           view={leftView}
           collapsed={leftCollapsed}
           onRouteView={routeLeftView}
+          activePluginPanel={activePluginPanel}
+          onPluginPanel={togglePluginPanel}
           onAction={(id: StripActionId) => {
             if (id === "terminal") {
               setTerminalOpen(true);
               return;
             }
-            // TODO: wire up paper / publish / graph handlers
+            if (id === "graph") {
+              // Open the synthetic graph tab in the active leaf.
+              // Routed through the same window event the file tree
+              // uses so we get tab-reuse for free.
+              window.dispatchEvent(
+                new CustomEvent("flux-open-file", {
+                  detail: { fileId: SYNTHETIC_GRAPH_ID },
+                }),
+              );
+              return;
+            }
+            // TODO: wire up paper / publish handlers
             console.log("strip action:", id);
           }}
         />
@@ -1067,7 +1129,7 @@ export function LatticeShell() {
         >
           <LeftSidebar
             view={leftView}
-            onChangeView={setLeftView}
+            onChangeView={routeLeftView}
             onToggleSidebar={toggleLeftSidebar}
             isMac={isMac}
             vaultName={vaultHandle?.name || "No Vault"}
@@ -1076,6 +1138,7 @@ export function LatticeShell() {
             onOpenHelp={() => console.log("Help not implemented yet")}
             vaultTree={fileTree}
             onOpenFile={handleOpenFile}
+            activePluginPanel={activePluginPanel}
           />
         </div>
         {/* Right divider — full height when expanded */}

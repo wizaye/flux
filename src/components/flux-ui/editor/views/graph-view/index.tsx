@@ -8,6 +8,7 @@ import {
   IcWand,
 } from "@/components/flux-ui/common/icons";
 import type { FileNode } from "@/state/editor";
+import { useLinkIndexStore } from "@/state/link-index-store";
 import { EditorPaneLayout } from "../editor-pane-layout";
 import type { EditorViewProps } from "../types";
 import GraphCanvas, {
@@ -39,12 +40,83 @@ import "./styles.css";
 
 const WIKILINK_RE = /\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]/g;
 
-function buildGraph(vault: Map<string, FileNode>): {
+interface IndexLikeLink {
+  from: string;
+  targetNorm: string;
+}
+
+/**
+ * Build the graph from the in-memory link index when it's populated
+ * (real vault, Rust-side bulk scan). Falls back to walking
+ * `vault.values().content` for the mock vault / browser preview
+ * where the index has no data.
+ *
+ * Both paths produce the same `{nodes, links}` shape so the canvas
+ * doesn't care which source ran. Node sizing uses `sqrt(degree)`
+ * so hubs stay visually distinct without dominating the canvas.
+ */
+function buildGraphFromIndex(
+  vault: Map<string, FileNode>,
+  indexLinks: IndexLikeLink[],
+): { nodes: GraphNode[]; links: GraphLink[] } {
+  // Enumerate markdown files; key both by full path AND by basename
+  // so wikilinks (which usually omit folders) still resolve when
+  // the vault has a unique note with that name.
+  const nodes: GraphNode[] = [];
+  const idByPath = new Map<string, string>();
+  const idByBase = new Map<string, string>();
+  const ambiguousBase = new Set<string>();
+  for (const node of vault.values()) {
+    if (node.kind !== "file") continue;
+    if (!/\.md$/i.test(node.name)) continue;
+    const baseName = node.name.replace(/\.md$/i, "");
+    nodes.push({ id: node.id, name: baseName, path: node.id, val: 1 });
+    const fullKey = node.id.replace(/\\/g, "/").toLowerCase().replace(/\.md$/, "");
+    idByPath.set(fullKey, node.id);
+    if (fullKey.startsWith("/")) idByPath.set(fullKey.slice(1), node.id);
+    const baseKey = baseName.toLowerCase();
+    if (idByBase.has(baseKey)) {
+      ambiguousBase.add(baseKey);
+    } else {
+      idByBase.set(baseKey, node.id);
+    }
+  }
+
+  const links: GraphLink[] = [];
+  const degree = new Map<string, number>();
+  for (const link of indexLinks) {
+    const fromKey = link.from.replace(/\\/g, "/").toLowerCase().replace(/\.md$/, "");
+    const sourceId =
+      idByPath.get(fromKey) ?? idByPath.get(fromKey.replace(/^\//, ""));
+    if (!sourceId) continue;
+    const targetKey = link.targetNorm;
+    // Prefer full-path match; fall back to basename only when it's
+    // unambiguous in the vault.
+    let targetId = idByPath.get(targetKey);
+    if (!targetId) {
+      const slash = targetKey.lastIndexOf("/");
+      const base = slash >= 0 ? targetKey.slice(slash + 1) : targetKey;
+      if (!ambiguousBase.has(base)) targetId = idByBase.get(base);
+    }
+    if (!targetId || targetId === sourceId) continue;
+    links.push({ source: sourceId, target: targetId });
+    degree.set(sourceId, (degree.get(sourceId) ?? 0) + 1);
+    degree.set(targetId, (degree.get(targetId) ?? 0) + 1);
+  }
+  for (const n of nodes) {
+    const d = degree.get(n.id) ?? 0;
+    n.val = 1 + Math.sqrt(d);
+  }
+  return { nodes, links };
+}
+
+/** Fallback for the mock vault (and browser preview) where the
+ *  Rust link indexer never runs. Scans each FileNode's inline
+ *  `content` field for `[[wikilinks]]`. */
+function buildGraphFromContent(vault: Map<string, FileNode>): {
   nodes: GraphNode[];
   links: GraphLink[];
 } {
-  // First pass: enumerate markdown files, build name→id lookup so
-  // wikilinks (which reference display names, not ids) resolve.
   const nodes: GraphNode[] = [];
   const byName = new Map<string, string>();
   for (const node of vault.values()) {
@@ -54,10 +126,6 @@ function buildGraph(vault: Map<string, FileNode>): {
     nodes.push({ id: node.id, name: baseName, path: node.id, val: 1 });
     byName.set(baseName.toLowerCase(), node.id);
   }
-
-  // Second pass: scan each file body for wikilinks and emit links.
-  // Sizing nodes by sqrt(degree) keeps hubs visually distinct without
-  // exploding into blobs that dominate the canvas.
   const links: GraphLink[] = [];
   const degree = new Map<string, number>();
   for (const node of vault.values()) {
@@ -102,8 +170,18 @@ export function GraphView(props: EditorViewProps) {
   const [linkForce, setLinkForce] = useState(0.4);
   const [linkDistance, setLinkDistance] = useState(150);
 
-  // Build the raw graph from the vault, then apply UI filters.
-  const rawGraph = useMemo(() => buildGraph(vault), [vault]);
+  // Build the raw graph. Prefer the Rust-side link index when it's
+  // populated (every real-vault edit incrementally maintains it);
+  // fall back to scanning FileNode.content inline for the mock
+  // vault / browser-preview where the indexer never runs.
+  const indexLinks = useLinkIndexStore((s) => s.links);
+  const indexHydrated = useLinkIndexStore((s) => s.hydrated);
+  const rawGraph = useMemo(() => {
+    if (indexHydrated && indexLinks.length > 0) {
+      return buildGraphFromIndex(vault, indexLinks);
+    }
+    return buildGraphFromContent(vault);
+  }, [vault, indexLinks, indexHydrated]);
 
   const filteredGraph = useMemo(() => {
     let nodes = rawGraph.nodes;

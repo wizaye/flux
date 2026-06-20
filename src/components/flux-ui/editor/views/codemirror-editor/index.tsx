@@ -46,9 +46,13 @@ import {
 } from "@codemirror/autocomplete";
 import { useEditorStore } from "@/state/editor-store";
 import { useSettingsStore } from "@/state/settings-store";
+import { usePluginStore } from "@/state/plugin-store";
 import type { FileNode } from "@/state/editor";
 import { vimMode as makeVimExtension } from "../../extensions/cm-vim";
 import { livePreviewExtension, livePreviewStyles } from "../../extensions/live-preview";
+import { taskActionExtension } from "../../extensions/task-action";
+import { slashCompletions } from "../../extensions/slash-menu";
+import { markdownShortcuts } from "../../extensions/markdown-shortcuts";
 import { EMPTY_PANE_ACTIONS } from "../types";
 import { PaneDocHeader } from "../../pane-doc-header";
 import { EditorPaneLayout } from "../editor-pane-layout";
@@ -360,17 +364,29 @@ function makeWikilinkCompletions(vault: Map<string, FileNode> | undefined) {
     if (!match) return null;
     const query = match.text.slice(2).toLowerCase();
     const all = collectMarkdownFiles(vault);
+    // closeBrackets auto-pairs `[`, so the doc usually looks like
+    // `[[query]]` with the cursor sitting between. Extend the
+    // replaced range over any trailing `]` characters so the
+    // completion doesn't leave a stray `]]` behind. Cap at two so
+    // we don't munch into real content past the auto-pair.
+    const after = context.state.doc.sliceString(
+      context.pos,
+      Math.min(context.state.doc.length, context.pos + 2),
+    );
+    let trailing = 0;
+    while (trailing < 2 && after[trailing] === "]") trailing++;
+    const replaceTo = context.pos + trailing;
+
     const options = all
       .filter((f) => query === "" || f.name.toLowerCase().includes(query))
       .map((f) => ({
         label: f.name,
         apply: (view: EditorView) => {
+          const insert = `[[${f.name}]]`;
           view.dispatch({
-            changes: {
-              from: match.from,
-              to: context.pos,
-              insert: `[[${f.name}]]`,
-            },
+            changes: { from: match.from, to: replaceTo, insert },
+            selection: { anchor: match.from + insert.length },
+            userEvent: "input.complete",
           });
         },
       }));
@@ -541,6 +557,12 @@ function CodeMirrorEditorBody({
   const showLineNumbers = useSettingsStore((s) => s.lineNumbers);
   const wordWrap = useSettingsStore((s) => s.wordWrap);
   const vimEnabled = useSettingsStore((s) => s.vimMode);
+  // Only mount the task-line "link work item" affordance when a
+  // plugin that can handle the request is enabled. Today that means
+  // kanban; widen the predicate when a generic provider hook lands.
+  const taskActionEnabled = usePluginStore((s) =>
+    s.plugins.some((p) => p.id === "kanban" && p.enabled),
+  );
 
   useEffect(() => {
     if (!editorRef.current || !filePath) return;
@@ -614,12 +636,21 @@ function CodeMirrorEditorBody({
         // for the same ranges. The extension is a no-op when not
         // mounted, so opting out is just "don't include it".
         ...(livePreview ? [livePreviewExtension, livePreviewStyles] : []),
+        // Hover affordance on `- [ ]` task lines → "Link work item"
+        // button. Only mounted when a plugin (kanban today) is
+        // listening for `flux-kanban-link-work-item`.
+        ...(taskActionEnabled ? [taskActionExtension] : []),
         search({ top: false }),
         ...makeVimExtension(vimEnabled),
         autocompletion({
-          override: [wikilinkCompletions],
+          override: [wikilinkCompletions, slashCompletions],
           activateOnTyping: true,
         }),
+        // Markdown shortcut input rules — triple-backtick fence
+        // auto-close, triple-dollar math block. Registered AFTER
+        // autocompletion so completions still win when a popup is
+        // open.
+        markdownShortcuts,
         EditorView.updateListener.of((update) => {
           if (
             update.docChanged &&
@@ -640,9 +671,33 @@ function CodeMirrorEditorBody({
           click: (event, view) => {
             const target = event.target as HTMLElement;
 
-            // Live-preview wikilink widget — matches both the legacy
-            // `.cm-wikilink` decoration (raw markdown view) and the
-            // new live-preview `.cm-lp-wikilink` widget.
+            // Work-item chip — markdown link with a `flux-wi://`
+            // URL. Distinct from a regular wikilink because the
+            // graph indexer must not see it as a note-to-note edge.
+            // The URL embeds only stable board/work-item ids; the
+            // kanban plugin's app-root resolves the board file path
+            // (renames don't break the link) and emits the
+            // open-file + focus events.
+            const workitemEl = target.closest(
+              ".cm-lp-workitem",
+            ) as HTMLElement | null;
+            if (workitemEl) {
+              const url = workitemEl.getAttribute("data-target") ?? "";
+              const m = /^flux-wi:\/\/(brd_[A-Za-z0-9]+)#(wi_[A-Za-z0-9]+)$/.exec(url);
+              if (m) {
+                window.dispatchEvent(
+                  new CustomEvent("flux-kanban-open-work-item", {
+                    detail: { boardId: m[1], itemId: m[2] },
+                  }),
+                );
+              }
+              return true;
+            }
+
+            // Live-preview wikilink widget — `.cm-wikilink` is the
+            // raw-markdown decoration, `.cm-lp-wikilink` is the
+            // live-preview replacement widget. Both carry a
+            // `data-target` with the wikilink target string.
             const wikilink = target.closest(
               ".cm-wikilink, .cm-lp-wikilink",
             ) as HTMLElement | null;
@@ -684,6 +739,11 @@ function CodeMirrorEditorBody({
     });
 
     const view = new EditorView({ state, parent: editorRef.current });
+    // Tag the editor DOM with the bound file path so DOM-level
+    // event handlers (e.g. the task-action extension's "link work
+    // item" button) can identify the source file without importing
+    // editor-store from inside a CodeMirror plugin.
+    view.dom.dataset.fluxFileId = currentPath;
     viewRef.current = view;
 
     return () => {
@@ -693,7 +753,7 @@ function CodeMirrorEditorBody({
       loadedFileRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, isDark, showLineNumbers, wordWrap, vimEnabled, livePreview]);
+  }, [filePath, isDark, showLineNumbers, wordWrap, vimEnabled, livePreview, taskActionEnabled]);
 
   // Sync external content into the editor doc.
   useEffect(() => {
@@ -758,6 +818,64 @@ function CodeMirrorEditorBody({
     return () =>
       window.removeEventListener(
         "flux-jump-to-line",
+        handler as EventListener,
+      );
+  }, [filePath]);
+
+  // Insert text at the current cursor (or replace an explicit
+  // range / the selection). Used by plugins/commands that need to
+  // drop a wikilink / chip into the active editor without
+  // re-routing through a custom IPC.
+  // Detail shape:
+  //   { fileId: string;
+  //     text: string;
+  //     from?: number; to?: number;        // explicit doc range to replace
+  //     replaceSelection?: boolean;        // fallback: replace selection
+  //   }
+  // Precedence: explicit `from/to` > `replaceSelection` > cursor head.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (
+        e as CustomEvent<{
+          fileId?: string;
+          text?: string;
+          from?: number;
+          to?: number;
+          replaceSelection?: boolean;
+        }>
+      ).detail;
+      if (!detail?.fileId || detail.fileId !== filePath) return;
+      const view = viewRef.current;
+      if (!view) return;
+      const text = detail.text ?? "";
+      const docLen = view.state.doc.length;
+      let from: number;
+      let to: number;
+      if (
+        typeof detail.from === "number" &&
+        typeof detail.to === "number" &&
+        detail.from >= 0 &&
+        detail.to >= detail.from &&
+        detail.to <= docLen
+      ) {
+        from = detail.from;
+        to = detail.to;
+      } else {
+        const range = view.state.selection.main;
+        from = detail.replaceSelection ? range.from : range.head;
+        to = detail.replaceSelection ? range.to : range.head;
+      }
+      view.dispatch({
+        changes: { from, to, insert: text },
+        selection: { anchor: from + text.length },
+        userEvent: "input.paste",
+      });
+      view.focus();
+    };
+    window.addEventListener("flux-insert-at-cursor", handler as EventListener);
+    return () =>
+      window.removeEventListener(
+        "flux-insert-at-cursor",
         handler as EventListener,
       );
   }, [filePath]);

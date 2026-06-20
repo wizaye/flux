@@ -7,7 +7,7 @@
  * any mocking overhead.
  */
 import { describe, it, expect, beforeEach } from "vitest";
-import { useEditorStore } from "../editor-store";
+import { useEditorStore } from "@/state/editor-store";
 
 /** Reset mutable state before each test so tests are independent. */
 beforeEach(() => {

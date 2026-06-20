@@ -38,6 +38,48 @@ export class WikilinkWidget extends WidgetType {
   }
 }
 
+/**
+ * Kanban work-item chip — rendered when a markdown link's URL uses
+ * the `flux-wi://` scheme. Visually distinct from a regular
+ * `[[wikilink]]` so the user can tell at a glance "this points to a
+ * structured work item, not another note".
+ *
+ * Stored as a markdown link (not wikilink) on disk so the graph /
+ * backlink indexer doesn't treat it as a note-to-note edge.
+ */
+export class WorkItemWidget extends WidgetType {
+  constructor(readonly url: string, readonly label: string) {
+    super();
+  }
+  override eq(other: WidgetType): boolean {
+    return (
+      other instanceof WorkItemWidget &&
+      other.url === this.url &&
+      other.label === this.label
+    );
+  }
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "cm-lp-workitem";
+    span.setAttribute("data-target", this.url);
+    span.setAttribute("draggable", "false");
+
+    const tag = document.createElement("span");
+    tag.className = "cm-lp-workitem-tag";
+    tag.textContent = "WI";
+    span.appendChild(tag);
+
+    const label = document.createElement("span");
+    label.className = "cm-lp-workitem-label";
+    label.textContent = this.label;
+    span.appendChild(label);
+    return span;
+  }
+  override ignoreEvent(): boolean {
+    return false;
+  }
+}
+
 /** `![[image.png]]` or `![alt](url)` rendered inline. */
 export class ImageWidget extends WidgetType {
   constructor(readonly src: string, readonly alt: string) {

@@ -11,7 +11,7 @@
  *   moveTabWithinLeaf, removeTabFromLeaf, splitLeaf
  */
 import { describe, it, expect } from "vitest";
-import type { SplitTree, Tab } from "../editor/types";
+import type { SplitTree, Tab } from "@/state/editor/types";
 import {
   findLeaf,
   leaves,
@@ -23,7 +23,7 @@ import {
   moveTabWithinLeaf,
   removeTabFromLeaf,
   splitLeaf,
-} from "../editor/split-tree";
+} from "@/state/editor/split-tree";
 
 // ── Fixture helpers ────────────────────────────────────────────────────────
 

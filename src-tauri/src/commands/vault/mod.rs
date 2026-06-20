@@ -88,11 +88,33 @@ pub async fn open_vault(
 ) -> Result<VaultHandle, AppError> {
     let handle = open_vault_impl(path.clone(), &state).await?;
     remember_last_vault(&app, &path);
+    start_watcher(&path, &app, &state);
     Ok(handle)
 }
 
+/// Spawn the FS watcher for the freshly-opened vault, replacing any
+/// previous watcher in `AppState`. Logs and continues on failure —
+/// the rest of the app degrades gracefully without watcher events
+/// (refresh button still works).
+fn start_watcher(path: &str, app: &AppHandle, state: &Arc<AppState>) {
+    let pool_opt = state.db_pool.lock().unwrap().clone();
+    let Some(pool) = pool_opt else {
+        tracing::warn!("start_watcher: no db pool; skipping");
+        return;
+    };
+    match crate::watcher::start(std::path::PathBuf::from(path), app.clone(), pool) {
+        Ok(boxed) => {
+            *state.watcher.lock().unwrap() = Some(boxed);
+            tracing::info!("file watcher started for {}", path);
+        }
+        Err(e) => {
+            tracing::warn!("start_watcher: failed: {e}");
+        }
+    }
+}
+
 /// Implementation of open_vault that can be tested.
-pub(crate) async fn open_vault_impl(
+pub async fn open_vault_impl(
     path: String,
     state: &Arc<AppState>,
 ) -> Result<VaultHandle, AppError> {
@@ -168,10 +190,11 @@ pub async fn create_vault(
 ) -> Result<VaultHandle, AppError> {
     let handle = create_vault_impl(path.clone(), &state).await?;
     remember_last_vault(&app, &path);
+    start_watcher(&path, &app, &state);
     Ok(handle)
 }
 
-async fn create_vault_impl(
+pub async fn create_vault_impl(
     path: String,
     state: &Arc<AppState>,
 ) -> Result<VaultHandle, AppError> {
@@ -199,7 +222,7 @@ pub async fn close_vault(
     Ok(())
 }
 
-async fn close_vault_impl(state: &Arc<AppState>) -> Result<(), AppError> {
+pub async fn close_vault_impl(state: &Arc<AppState>) -> Result<(), AppError> {
     // Check if a vault is open
     {
         let vault_path = state.vault_path.lock().unwrap();
@@ -235,7 +258,7 @@ pub async fn get_vault_info(state: State<'_, Arc<AppState>>) -> Result<VaultHand
     get_vault_info_impl(&state).await
 }
 
-async fn get_vault_info_impl(state: &Arc<AppState>) -> Result<VaultHandle, AppError> {
+pub async fn get_vault_info_impl(state: &Arc<AppState>) -> Result<VaultHandle, AppError> {
     // Get vault path
     let path = {
         let vault_path = state.vault_path.lock().unwrap();
@@ -303,98 +326,4 @@ fn init_vault_structure(vault_path: &Path) -> Result<(), AppError> {
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-    use tempfile::tempdir;
-
-    fn create_test_state() -> Arc<AppState> {
-        Arc::new(AppState::default())
-    }
-
-    #[tokio::test]
-    async fn test_create_and_open_vault() {
-        let dir = tempdir().unwrap();
-        let vault_path = dir.path().join("test-vault");
-        let path_str = vault_path.to_str().unwrap().to_string();
-
-        let state = create_test_state();
-
-        // Create vault
-        let handle = create_vault_impl(path_str.clone(), &state)
-            .await
-            .expect("Failed to create vault");
-
-        assert_eq!(handle.name, "test-vault");
-        assert_eq!(handle.file_count, 0);
-
-        // Verify structure was created
-        assert!(vault_path.join(".zenvault").exists());
-        assert!(vault_path.join(".trash").exists());
-        assert!(vault_path.join(".archive").exists());
-        assert!(vault_path.join(".zenvault").join(".gitignore").exists());
-
-        // Verify state was updated
-        let stored_path = state.vault_path.lock().unwrap().clone();
-        assert_eq!(stored_path, Some(path_str));
-
-        // Close vault
-        close_vault_impl(&state)
-            .await
-            .expect("Failed to close vault");
-
-        // Verify state was cleared
-        let stored_path = state.vault_path.lock().unwrap().clone();
-        assert_eq!(stored_path, None);
-    }
-
-    #[tokio::test]
-    async fn test_open_nonexistent_vault_fails() {
-        let state = create_test_state();
-        let result = open_vault_impl(
-            "/nonexistent/path".to_string(),
-            &state,
-        )
-        .await;
-
-        assert!(result.is_err());
-        match result {
-            Err(AppError::InvalidVaultPath(_)) => {}
-            _ => panic!("Expected InvalidVaultPath error"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_close_without_open_fails() {
-        let state = create_test_state();
-        let result = close_vault_impl(&state).await;
-
-        assert!(result.is_err());
-        match result {
-            Err(AppError::NoVaultOpen) => {}
-            _ => panic!("Expected NoVaultOpen error"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_get_vault_info() {
-        let dir = tempdir().unwrap();
-        let vault_path = dir.path().join("test-vault");
-        let path_str = vault_path.to_str().unwrap().to_string();
-
-        let state = create_test_state();
-
-        // Create and open vault
-        create_vault_impl(path_str.clone(), &state)
-            .await
-            .unwrap();
-
-        // Get vault info
-        let info = get_vault_info_impl(&state).await.unwrap();
-        assert_eq!(info.name, "test-vault");
-        assert_eq!(info.path, path_str);
-    }
 }

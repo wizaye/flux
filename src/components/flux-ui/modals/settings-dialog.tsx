@@ -55,6 +55,7 @@ import {
   type HotkeyId,
   type HotkeyBinding,
 } from "@/state/settings-store";
+import { usePluginStore } from "@/state/plugin-store";
 import {
   IcArchive,
   IcBook,
@@ -115,14 +116,16 @@ const CORE_PLUGIN_SECTIONS: Section[] = [
 ];
 
 const COMMUNITY_PLUGIN_SECTIONS: Section[] = [
-  { id: "kanban", label: "Kanban", Icon: IcBookmark },
+  // Static entries removed — community plugin sections are now
+  // derived from `usePluginStore.settingsSections` so adding /
+  // enabling / disabling a plugin reflows the sidebar live. See
+  // `SettingsDialog` below for the dynamic merge.
 ];
-
-const ALL_SECTIONS: Section[] = [
-  ...OPTION_SECTIONS,
-  ...CORE_PLUGIN_SECTIONS,
-  ...COMMUNITY_PLUGIN_SECTIONS,
-];
+// Keep the reference exported indirectly: it's only used by the
+// static `ALL_SECTIONS` constant which is itself no longer needed
+// now that we derive the full section list at runtime. Marking it
+// `void` so the lint pass doesn't trip on the unused value.
+void COMMUNITY_PLUGIN_SECTIONS;
 
 export interface SettingsDialogProps {
   open: boolean;
@@ -135,6 +138,21 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [active, setActive] = React.useState<string>("general");
   const [query, setQuery] = React.useState("");
 
+  // Plugin contributions — when a plugin is enabled and contributes
+  // a settings panel, it shows up under "Community plugins" with its
+  // own sidebar entry. The "Community plugins" landing section (list
+  // of all installed plugins + enable switches) is always rendered.
+  const settingsSections = usePluginStore((s) => s.settingsSections);
+  const pluginSettingsSections = React.useMemo<Section[]>(
+    () =>
+      settingsSections.map((s) => ({
+        id: `plugin-settings-${s.pluginId}`,
+        label: s.panel.label,
+        Icon: IcExtensions,
+      })),
+    [settingsSections],
+  );
+
   // Filter the sidebar list when the user types in the search box.
   // Performs a case-insensitive contains match on section labels.
   const filteredOptions = React.useMemo(
@@ -146,13 +164,18 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
     [query],
   );
   const filteredCommunity = React.useMemo(
-    () => filterSections(COMMUNITY_PLUGIN_SECTIONS, query),
-    [query],
+    () => filterSections(pluginSettingsSections, query),
+    [query, pluginSettingsSections],
+  );
+
+  const allSections = React.useMemo(
+    () => [...OPTION_SECTIONS, ...CORE_PLUGIN_SECTIONS, ...pluginSettingsSections],
+    [pluginSettingsSections],
   );
 
   const activeSection = React.useMemo(
-    () => ALL_SECTIONS.find((s) => s.id === active) ?? OPTION_SECTIONS[0],
-    [active],
+    () => allSections.find((s) => s.id === active) ?? OPTION_SECTIONS[0],
+    [active, allSections],
   );
 
   return (
@@ -308,6 +331,12 @@ function SectionGroup({
 // ── Body router ──────────────────────────────────────────────────────
 
 function SectionBody({ section }: { section: Section }) {
+  // Dynamic plugin-settings sections live under
+  // `plugin-settings-<id>` — route them before the static switch.
+  if (section.id.startsWith("plugin-settings-")) {
+    const pluginId = section.id.slice("plugin-settings-".length);
+    return <PluginSettingsBody pluginId={pluginId} />;
+  }
   switch (section.id) {
     case "general":
       return <GeneralBody />;
@@ -321,9 +350,83 @@ function SectionBody({ section }: { section: Section }) {
       return <FilesLinksBody />;
     case "ai-privacy":
       return <AIPrivacyBody />;
+    case "community-plugins":
+      return <CommunityPluginsBody />;
     default:
       return <ComingSoonBody section={section} />;
   }
+}
+
+/**
+ * Community plugins landing — installed plugin list with enable
+ * toggle + uninstall button + the "browse community" placeholder.
+ * Plugin-specific settings live under each plugin's own
+ * `settingsPanel` section.
+ */
+function CommunityPluginsBody() {
+  const plugins = usePluginStore((s) => s.plugins);
+  const setEnabled = usePluginStore((s) => s.setEnabled);
+  const uninstall = usePluginStore((s) => s.uninstall);
+  const community = plugins.filter((p) => p.loaderKind === "external" || true);
+  return (
+    <div>
+      <SectionTitle>Installed plugins</SectionTitle>
+      {community.length === 0 ? (
+        <p className="text-[12.5px] text-muted-foreground py-4">
+          No plugins installed yet.
+        </p>
+      ) : (
+        community.map((p) => (
+          <Row
+            key={p.id}
+            title={p.manifest.name}
+            description={`${p.manifest.author} · v${p.version} — ${p.manifest.description}`}
+          >
+            <div className="flex items-center gap-3">
+              <Switch
+                checked={p.enabled}
+                onCheckedChange={(v) => setEnabled(p.id, v === true)}
+              />
+              {p.loaderKind === "external" && (
+                <button
+                  type="button"
+                  onClick={() => uninstall(p.id)}
+                  className="text-[11px] text-destructive hover:underline"
+                >
+                  Uninstall
+                </button>
+              )}
+            </div>
+          </Row>
+        ))
+      )}
+
+      <SectionTitle>Browse community plugins</SectionTitle>
+      <Row
+        title="Plugin registry"
+        description="Coming soon — install third-party plugins from a public registry."
+      >
+        <Button variant="outline" disabled>
+          Browse
+        </Button>
+      </Row>
+    </div>
+  );
+}
+
+/** Render a plugin's contributed settings panel (Phase A: builtin
+ *  component refs; Phase C: dynamic import of `bundleUrl`). */
+function PluginSettingsBody({ pluginId }: { pluginId: string }) {
+  const builtins = usePluginStore((s) => s.builtinComponents);
+  const Panel = builtins[pluginId]?.settingsPanel;
+  if (!Panel) {
+    return (
+      <p className="text-[12.5px] text-muted-foreground">
+        Plugin settings panel not available yet.
+      </p>
+    );
+  }
+  return <Panel />;
 }
 
 // ── Reusable primitives ──────────────────────────────────────────────

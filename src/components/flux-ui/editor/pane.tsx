@@ -33,6 +33,7 @@ import { PdfView } from "./views/pdf-view";
 import { GraphView } from "./views/graph-view";
 import type { EditorViewProps, PaneActions } from "./views/types";
 import { useEditorStore } from "@/state/editor-store";
+import { usePluginStore } from "@/state/plugin-store";
 import { useVaultStore } from "@/state/vault-store";
 import { useSettingsStore } from "@/state/settings-store";
 import { useBookmarksStore } from "@/state/bookmarks-store";
@@ -209,6 +210,18 @@ export function Pane(props: PaneProps) {
 
   const handleBodyDragOver = React.useCallback(
     (e: React.DragEvent) => {
+      // Only react to drags whose payload is a flux tab or file
+      // descriptor. Plugin-owned drags (kanban cards, future
+      // canvas widgets, etc.) carry their own MIME types and must
+      // not trigger the host's split-preview overlay — otherwise
+      // moving a card looks like dragging a tab into a new split.
+      const types = e.dataTransfer?.types;
+      const isFluxDrag =
+        !!types &&
+        (types.includes("application/x-flux-tab") ||
+          types.includes("application/x-flux-file-id"));
+      if (!isFluxDrag) return;
+
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
       const edge = calcEdge(e);
@@ -544,7 +557,7 @@ export function Pane(props: PaneProps) {
           ./views/editor-pane-layout.tsx for the contract. */}
       <div
         ref={bodyRef}
-        className="relative flex-1 min-h-0 min-w-0 flex"
+        className="relative flex-1 min-h-0 min-w-0 flex overflow-hidden"
         onDragOver={handleBodyDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -706,6 +719,11 @@ function PaneBody({
   // calling `useSettingsStore` after a conditional return below).
   const defaultViewMode = useSettingsStore((s) => s.defaultViewMode);
 
+  // Plugin editor-view registry — read here so a plugin enable/disable
+  // mutation reflows any open tab immediately.
+  const pluginEditorViewRegistry = usePluginStore((s) => s.editorViewRegistry);
+  const builtinPluginComponents = usePluginStore((s) => s.builtinComponents);
+
   // Lazy-load content from disk when a real-vault file is opened in
   // this pane and we haven't cached it yet. Mock-vault FileNodes
   // carry `content` inline so they skip this. Binary kinds (pdf,
@@ -784,6 +802,53 @@ function PaneBody({
       }
     },
   };
+
+  // Plugin editor view registry: if a contributed `editorViews`
+  // extension matches the file, the plugin's component wins over the
+  // built-in dispatch. Matches longest-suffix first so
+  // `.kanban.json` beats `.json` (when an external JSON viewer
+  // plugin lands later).
+  const lowerName = file.name.toLowerCase();
+  let pluginExt = Object.keys(pluginEditorViewRegistry)
+    .sort((a, b) => b.length - a.length)
+    .find((ext) => lowerName.endsWith(ext));
+
+  // Content-based fallback: a board renamed out of the
+  // `.board.yaml` namespace (e.g. user dragged `MyBoard.board.yaml`
+  // → `MyBoard.yaml` in the OS file explorer) still opens as
+  // kanban as long as its YAML body declares `flux: board`. This is
+  // a safety net for renames; the sidebar's Boards list itself
+  // still only lists files matching the extension contract.
+  if (
+    !pluginExt &&
+    typeof content === "string" &&
+    (lowerName.endsWith(".yaml") || lowerName.endsWith(".yml")) &&
+    pluginEditorViewRegistry[".board.yaml"] &&
+    /^\s*(?:---\s*\n)?\s*flux:\s*board\b/i.test(content.slice(0, 256))
+  ) {
+    pluginExt = ".board.yaml";
+  }
+
+  if (pluginExt) {
+    const pluginId = pluginEditorViewRegistry[pluginExt];
+    const components = builtinPluginComponents[pluginId];
+    const PluginView = components?.editorViews?.[pluginExt];
+    if (PluginView) {
+      // Adapt the host's pane-internal baseProps to the SDK-public
+      // `EditorViewProps` shape plugins program against. Keeping the
+      // adapter in one place means plugin authors never see host
+      // internals like `vault`, `paneActions`, etc.
+      const sdkProps = {
+        path: file.id,
+        title: file.name,
+        content,
+        onChange: baseProps.onChange ?? (() => undefined),
+        onSave: baseProps.onSave ?? (() => undefined),
+        file,
+      };
+      return <PluginView {...sdkProps} />;
+    }
+  }
 
   // Kind-based dispatch — graph + pdf ignore viewMode entirely.
   if (file.kind === "graph") return <GraphView {...baseProps} />;

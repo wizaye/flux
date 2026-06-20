@@ -17,7 +17,7 @@ import {
   DEFAULT_HOTKEYS,
   useSettingsStore,
   type HotkeyBinding,
-} from "../settings-store";
+} from "@/state/settings-store";
 
 // ── makeBinding ────────────────────────────────────────────────────────────
 

@@ -1,8 +1,9 @@
 // Core modules
 pub mod commands;
-mod db;
-mod state;
-mod types;
+pub mod db;
+pub mod state;
+pub mod types;
+pub mod watcher;
 
 use state::AppState;
 use std::sync::Arc;
@@ -44,6 +45,9 @@ pub fn run() {
             commands::fs::list_trash,
             commands::fs::restore_from_trash,
             commands::fs::purge_trash_entry,
+            // Link / tag indexer
+            commands::links::scan_vault_links,
+            commands::links::scan_vault_links_subset,
             // Export
             commands::export::export_markdown_to_pdf,
         ])

@@ -147,6 +147,17 @@ pub struct TrashEntry {
     pub trashed_at: i64,
 }
 
+/// Single result row returned by `search_files`. The snippet is
+/// pre-highlighted HTML with `<mark>` tags wrapping the match — the
+/// frontend renders it verbatim inside the result card.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    pub relative_path: String,
+    pub title: String,
+    pub snippet: String,
+}
+
 /// Lightweight filesystem metadata for a single file or directory.
 /// Returned by `get_file_metadata` — used by the sidebar's hover
 /// tooltip so we don't have to bake created/modified into every

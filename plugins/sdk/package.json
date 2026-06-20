@@ -1,0 +1,20 @@
+{
+  "name": "@flux/plugin-sdk",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Shared types + tiny host stub for Flux plugins. Imported by every plugin package.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./host": "./src/host.ts",
+    "./layout": "./src/layout.tsx",
+    "./drag": "./src/drag.ts",
+    "./ui": "./src/ui.ts"
+  },
+  "peerDependencies": {
+    "react": "*"
+  }
+}

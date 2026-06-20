@@ -17,7 +17,15 @@
       "@/*": ["./src/*"],
       "@/components/*": ["./src/components/*"],
       "@/lib/*": ["./src/lib/*"],
-      "@/styles/*": ["./src/styles/*"]
+      "@/styles/*": ["./src/styles/*"],
+      "@flux/plugin-sdk": ["./plugins/sdk/src/index.ts"],
+      "@flux/plugin-sdk/types": ["./plugins/sdk/src/types.ts"],
+      "@flux/plugin-sdk/host": ["./plugins/sdk/src/host.ts"],
+      "@flux/plugin-sdk/layout": ["./plugins/sdk/src/layout.tsx"],
+      "@flux/plugin-sdk/drag": ["./plugins/sdk/src/drag.ts"],
+      "@flux/plugin-sdk/ui": ["./plugins/sdk/src/ui.ts"],
+      "@flux/plugin-kanban": ["./plugins/kanban/src/index.ts"],
+      "@flux/plugin-canvas": ["./plugins/canvas/src/index.ts"]
     },
 
     /* Linting */
@@ -26,6 +34,6 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"],
+  "include": ["src", "plugins"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

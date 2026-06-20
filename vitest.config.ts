@@ -16,16 +16,17 @@ export default defineConfig({
     // jsdom gives us a full DOM + localStorage for store tests.
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
-    include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    include: ["tests/**/*.{test,spec}.{ts,tsx}"],
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],
-      include: ["src/**/*.{ts,tsx}"],
+      include: ["src/**/*.{ts,tsx}", "plugins/**/src/**/*.{ts,tsx}"],
       exclude: [
         "src/test/**",
         "src/main.tsx",
         "src/vite-env.d.ts",
         "src/**/*.d.ts",
+        "plugins/sdk/**",
       ],
     },
   },

@@ -174,6 +174,23 @@ export async function exportMarkdownToPdf(
   });
 }
 
+/** Single hit from `searchFiles`. `snippet` is pre-highlighted HTML
+ *  with `<mark>` wrapping each match — render verbatim. */
+export interface SearchHit {
+  relativePath: string;
+  title: string;
+  snippet: string;
+}
+
+/** Full-text search over the vault's FTS5 index. Returns BM25-ranked
+ *  hits. `limit` defaults to 100, capped at 500 on the Rust side. */
+export async function searchFiles(
+  query: string,
+  limit?: number,
+): Promise<SearchHit[]> {
+  return await invoke('search_files', { query, limit });
+}
+
 export async function createFile(path: string, content: string): Promise<void> {
   return await invoke('create_file', { path, content });
 }
@@ -214,6 +231,53 @@ export async function restoreFromTrash(trashPath: string): Promise<string> {
 
 export async function purgeTrashEntry(trashPath: string): Promise<void> {
   return await invoke('purge_trash_entry', { trashPath });
+}
+
+// ── Link / tag indexer ───────────────────────────────────────────────────
+
+/** Outbound link in a markdown file. The frontend keys the
+ *  reverse index on `targetNorm` (case-folded, `.md` stripped). */
+export interface LinkRef {
+  from: string;
+  line: number;
+  /** Raw target text from the link. */
+  target: string;
+  /** Lowercased, `.md`-stripped target for matching. */
+  targetNorm: string;
+  kind: 'wiki' | 'markdown';
+  snippet: string;
+}
+
+export interface TagRef {
+  from: string;
+  line: number;
+  tag: string;
+}
+
+export interface LinkScanResult {
+  files: string[];
+  links: LinkRef[];
+  tags: TagRef[];
+  scannedFiles: number;
+  skippedTooLarge: number;
+}
+
+/** Full vault scan — every `*.md` file. Runs on vault open and
+ *  whenever the user requests a manual reindex. */
+export async function scanVaultLinks(): Promise<LinkScanResult> {
+  return await invoke('scan_vault_links');
+}
+
+/** Incremental scan — re-extract links/tags for the listed paths.
+ *  The frontend reconciles by removing rows whose `from` matches
+ *  one of these paths, then appending the new entries. Paths that
+ *  no longer exist on disk return without any links/tags but ARE
+ *  included in the result's `files` array so the frontend knows to
+ *  drop them. */
+export async function scanVaultLinksSubset(
+  paths: string[],
+): Promise<LinkScanResult> {
+  return await invoke('scan_vault_links_subset', { paths });
 }
 
 // ── Test Command ──────────────────────────────────────────────────────────

@@ -20,7 +20,7 @@ use printpdf::{
     BuiltinFont, IndirectFontRef, Line, Mm, PdfDocument, PdfDocumentReference, PdfLayerIndex,
     PdfLayerReference, PdfPageIndex, Point,
 };
-use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use std::fs::File;
 use std::io::BufWriter;
 
@@ -338,7 +338,21 @@ pub async fn export_markdown_to_pdf(
     tokio::task::spawn_blocking(move || -> Result<(), AppError> {
         let mut layout = Layout::new(&title)?;
 
-        let parser = Parser::new(&markdown);
+        // Enable the GitHub-flavoured Markdown extensions so tables,
+        // strikethrough, task lists, footnotes, smart punctuation,
+        // heading anchors and YAML frontmatter all parse properly.
+        // The default `Parser::new` is plain CommonMark and would
+        // leak `|table|` syntax, `~~strike~~`, `- [ ]`, `[^foot]`
+        // tokens, etc. into the output as literal text.
+        let mut opts = Options::empty();
+        opts.insert(Options::ENABLE_TABLES);
+        opts.insert(Options::ENABLE_STRIKETHROUGH);
+        opts.insert(Options::ENABLE_TASKLISTS);
+        opts.insert(Options::ENABLE_FOOTNOTES);
+        opts.insert(Options::ENABLE_SMART_PUNCTUATION);
+        opts.insert(Options::ENABLE_HEADING_ATTRIBUTES);
+        opts.insert(Options::ENABLE_YAML_STYLE_METADATA_BLOCKS);
+        let parser = Parser::new_ext(&markdown, opts);
         for ev in parser {
             match ev {
                 // Block start
@@ -435,18 +449,80 @@ pub async fn export_markdown_to_pdf(
                 }
                 Event::Rule => layout.rule(),
                 Event::Html(_) | Event::InlineHtml(_) => {}
-                Event::FootnoteReference(_) | Event::TaskListMarker(_) => {}
-                Event::Start(Tag::FootnoteDefinition(_))
-                | Event::End(TagEnd::FootnoteDefinition) => {}
-                Event::Start(Tag::Table(_)) | Event::End(TagEnd::Table) => layout.gap(2.0),
-                Event::Start(Tag::TableHead)
-                | Event::End(TagEnd::TableHead)
-                | Event::Start(Tag::TableRow)
-                | Event::End(TagEnd::TableRow)
-                | Event::Start(Tag::TableCell)
-                | Event::End(TagEnd::TableCell) => {}
+                Event::FootnoteReference(name) => {
+                    let saved = layout.style;
+                    layout.style = layout.style.with(S_ITALIC);
+                    layout.push_span(&format!("[^{}]", name));
+                    layout.style = saved;
+                }
+                Event::TaskListMarker(checked) => {
+                    // pulldown-cmark emits the marker AFTER the list
+                    // item's leading bullet text \u2014 we replace the
+                    // bullet by overwriting the last span we pushed.
+                    if let Some(last) = layout.spans.last_mut() {
+                        if last.text == "\u{2022} " {
+                            last.text = if checked { "\u{2611} ".into() } else { "\u{2610} ".into() };
+                        }
+                    }
+                }
+                Event::Start(Tag::FootnoteDefinition(name)) => {
+                    layout.gap(1.5);
+                    let saved = layout.style;
+                    layout.style = layout.style.with(S_BOLD);
+                    layout.push_span(&format!("[^{}]: ", name));
+                    layout.style = saved;
+                }
+                Event::End(TagEnd::FootnoteDefinition) => {
+                    layout.flush_paragraph(4.0);
+                    layout.gap(1.0);
+                }
+                Event::Start(Tag::Table(_)) => {
+                    layout.gap(2.0);
+                }
+                Event::End(TagEnd::Table) => {
+                    layout.flush_paragraph(0.0);
+                    layout.gap(2.0);
+                }
+                Event::Start(Tag::TableHead) => {
+                    layout.style = layout.style.with(S_BOLD);
+                }
+                Event::End(TagEnd::TableHead) => {
+                    layout.flush_paragraph(0.0);
+                    layout.style = layout.style.without(S_BOLD);
+                    // Underline row.
+                    layout.ensure_space(0.5);
+                    let y = layout.y + 0.5;
+                    let layer = layout.current_layer();
+                    layer.add_line(Line {
+                        points: vec![
+                            (Point::new(Mm(MARGIN), Mm(y)), false),
+                            (Point::new(Mm(PAGE_W - MARGIN), Mm(y)), false),
+                        ],
+                        is_closed: false,
+                    });
+                    layout.gap(0.5);
+                }
+                Event::Start(Tag::TableRow) => {}
+                Event::End(TagEnd::TableRow) => {
+                    layout.flush_paragraph(0.0);
+                }
+                Event::Start(Tag::TableCell) => {}
+                Event::End(TagEnd::TableCell) => {
+                    // Separate cells with a vertical bar so the
+                    // table stays legible without true column layout.
+                    layout.push_span("  \u{2502}  ");
+                }
                 Event::Start(Tag::HtmlBlock) | Event::End(TagEnd::HtmlBlock) => {}
-                Event::Start(Tag::MetadataBlock(_)) | Event::End(TagEnd::MetadataBlock(_)) => {}
+                Event::Start(Tag::MetadataBlock(_)) => {
+                    // Treat frontmatter as a verbatim code block so
+                    // YAML stays readable without bleeding into the
+                    // body text.
+                    layout.in_code_block = true;
+                }
+                Event::End(TagEnd::MetadataBlock(_)) => {
+                    layout.flush_code_block();
+                    layout.gap(2.0);
+                }
             }
         }
 

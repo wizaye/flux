@@ -37,6 +37,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# ── Text indexing ─────────────────────────────────────────────────────────
+regex = "1"
+
 # ── SQLite + FTS5 + pool ──────────────────────────────────────────────────
 rusqlite = { version = "0.31", features = ["bundled", "uuid", "chrono", "serde_json"] }
 r2d2 = "0.8"

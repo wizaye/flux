@@ -2,7 +2,10 @@
 //!
 //! - vault: Vault lifecycle operations
 //! - fs: File system operations (files and directories)
+//! - links: Link / tag indexer for the backlinks + graph views
+//! - export: PDF export
 
 pub mod export;
 pub mod fs;
+pub mod links;
 pub mod vault;

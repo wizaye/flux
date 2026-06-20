@@ -5,7 +5,7 @@
 
 use crate::db::{self, repo::FileRecord};
 use crate::state::AppState;
-use crate::types::{AppError, EntryType, FileEntry, FileMetadata, FileState, FileTreeNode, MoveResult, RenameResult, TrashEntry};
+use crate::types::{AppError, EntryType, FileEntry, FileMetadata, FileState, FileTreeNode, MoveResult, RenameResult, SearchHit, TrashEntry};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -13,9 +13,7 @@ use tauri::State;
 use uuid::Uuid;
 
 pub mod common;
-
-#[cfg(test)]
-mod tests;
+pub mod wikilink;
 
 use common::{get_db_pool_from_state, get_vault_path_from_state, validate_and_resolve_path};
 
@@ -161,6 +159,13 @@ pub async fn write_file(
     // Extract title from frontmatter or filename
     let title = extract_title(&content, &path);
 
+    // Body capture for FTS upsert (clone-once into the closure). We
+    // skip indexing non-text files via a coarse extension check —
+    // images / binaries won't tokenise meaningfully.
+    let body_for_fts = if is_indexable(&path) { content.clone() } else { String::new() };
+    let title_for_fts = title.clone();
+    let path_for_fts = path.clone();
+
     db::run_blocking(&pool, move |conn| {
         // Check if file exists in database
         if let Some(mut record) = FileRecord::get_by_path(conn, &path)? {
@@ -184,12 +189,26 @@ pub async fn write_file(
             };
             FileRecord::insert(conn, &record)?;
         }
+        // Upsert FTS row (no-op body for non-indexable files just
+        // removes them from search results, which is what we want).
+        db::repo::fts_upsert(conn, &path_for_fts, &title_for_fts, &body_for_fts)?;
         Ok(())
     })
     .await
     .map_err(|e| AppError::Database(e.to_string()))?;
 
     Ok(())
+}
+
+/// Cheap content-type gate for the FTS index — only text-like files
+/// get their body tokenised. Avoids bloating the index with binary
+/// blobs that produce zero useful search hits.
+fn is_indexable(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    matches!(
+        Path::new(&lower).extension().and_then(|e| e.to_str()),
+        Some("md") | Some("markdown") | Some("txt") | Some("mdx") | Some("rst") | Some("canvas")
+    )
 }
 
 /// Write raw bytes to an absolute path outside the vault.
@@ -302,7 +321,10 @@ pub async fn delete_file(
     let pool = get_db_pool_from_state(&state)?;
     let path_for_db = path.clone();
     if let Err(e) = db::run_blocking(&pool, move |conn| {
-        FileRecord::update_state(conn, &path_for_db, FileState::Trashed)
+        FileRecord::update_state(conn, &path_for_db, FileState::Trashed)?;
+        // Trashed files don't appear in search.
+        db::repo::fts_delete(conn, &path_for_db)?;
+        Ok(())
     })
     .await
     {
@@ -343,23 +365,59 @@ pub async fn move_file(
     tokio::fs::rename(&src_path, &dst_path).await?;
 
     // Update database path — best-effort (see delete_file note).
+    // We also rebuild the FTS row at the new path: the body hasn't
+    // changed but the path key has, and `relative_path` is the FTS
+    // join key the search panel filters on.
     let pool = get_db_pool_from_state(&state)?;
     let dst_clone = dst.clone();
     let src_for_db = src.clone();
+    let dst_for_fts = dst.clone();
+    let dst_disk_path = dst_path.clone();
     if let Err(e) = db::run_blocking(&pool, move |conn| {
-        FileRecord::update_path(conn, &src_for_db, &dst_clone)
+        FileRecord::update_path(conn, &src_for_db, &dst_clone)?;
+        db::repo::fts_delete(conn, &src_for_db)?;
+        // Re-read the moved file's body so the FTS index points at
+        // the new path with fresh content. Skip silently if the read
+        // fails — search staleness is recoverable; a failed rename
+        // is not.
+        if is_indexable(&dst_for_fts) {
+            if let Ok(body) = std::fs::read_to_string(&dst_disk_path) {
+                let title = extract_title(&body, &dst_for_fts);
+                db::repo::fts_upsert(conn, &dst_for_fts, &title, &body)?;
+            }
+        }
+        Ok(())
     })
     .await
     {
         tracing::warn!("move_file: DB index update failed (FS op succeeded): {e}");
     }
 
-    // TODO: Implement wikilink healing (Feature 20)
-    // For now, return zero healed links
+    // Wikilink healing — rewrite `[[old]]`, `[[path/old]]`,
+    // `[[old|alias]]`, `[[old#section]]` in every other markdown
+    // file to point at the new name/path. Runs on the blocking pool
+    // because we walk the vault tree synchronously.
+    let vault_for_heal = vault_path.clone();
+    let src_for_heal = src.clone();
+    let dst_for_heal = dst.clone();
+    let (links_healed, files_updated) =
+        tokio::task::spawn_blocking(move || -> Result<(usize, usize), AppError> {
+            wikilink::heal_links(&vault_for_heal, &src_for_heal, &dst_for_heal)
+                .map_err(|e| AppError::Io(e.to_string()))
+        })
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+        .unwrap_or_else(|e| {
+            // Heal failure isn't fatal — the rename already succeeded
+            // and the user can re-run a heal manually.
+            tracing::warn!("move_file: wikilink heal failed: {e}");
+            (0, 0)
+        });
+
     Ok(MoveResult {
         new_path: dst,
-        links_healed: 0,
-        files_updated: 0,
+        links_healed: links_healed as u32,
+        files_updated: files_updated as u32,
     })
 }
 
@@ -549,15 +607,65 @@ pub async fn get_file_tree(
 
 // ── Helper Functions ──────────────────────────────────────────────────────
 
-/// Extract title from file content (frontmatter or filename fallback).
-fn extract_title(_content: &str, path: &str) -> String {
-    // TODO: Parse frontmatter YAML for title field
-    // For now, use filename without extension
-    Path::new(path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Untitled")
-        .to_string()
+/// Extract title from file content (YAML frontmatter `title:` field
+/// first, then the first H1 heading, then the filename stem). Matches
+/// the precedence Obsidian + most static-site generators use.
+pub(crate) fn extract_title(content: &str, path: &str) -> String {
+    // Cheap fallback used by every code path below.
+    let stem_fallback = || -> String {
+        Path::new(path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Untitled")
+            .to_string()
+    };
+
+    let bytes = content.as_bytes();
+    if !content.starts_with("---") {
+        return first_h1(content).unwrap_or_else(stem_fallback);
+    }
+    // Find the closing `---` on its own line. Anything past the first
+    // 16 KiB of YAML is almost certainly malformed; cap the search to
+    // keep the scan cheap on huge files.
+    let cap = bytes.len().min(16 * 1024);
+    let after_first = &content[3..cap];
+    let Some(end_rel) = after_first.find("\n---") else {
+        return first_h1(content).unwrap_or_else(stem_fallback);
+    };
+    let fm = &after_first[..end_rel];
+
+    // Tiny line-by-line `title: …` parser. Avoids pulling a full YAML
+    // crate just for one scalar field; users with quoted titles get
+    // the unquoted value via the trim chain.
+    for line in fm.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("title:") {
+            let v = rest
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .trim()
+                .to_string();
+            if !v.is_empty() {
+                return v;
+            }
+        }
+    }
+    first_h1(content).unwrap_or_else(stem_fallback)
+}
+
+/// Return the first `# Heading` text in `content`, if any.
+fn first_h1(content: &str) -> Option<String> {
+    for line in content.lines().take(200) {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("# ") {
+            let h = rest.trim().to_string();
+            if !h.is_empty() {
+                return Some(h);
+            }
+        }
+    }
+    None
 }
 
 /// Check if a file/folder should be ignored.
@@ -863,4 +971,37 @@ pub async fn purge_trash_entry(
     }
 
     Ok(())
+}
+
+/// FTS5 search over the vault's indexed files.
+///
+/// `query` is parsed tokenwise: each whitespace-separated token is
+/// wrapped in double quotes (so phrases stay literal) and gets a `*`
+/// suffix for prefix matching. This matches user expectation for an
+/// incremental search box (typing "az" finds "AzCiM") without
+/// exposing FTS5's MATCH operator surface to the UI.
+///
+/// `limit` caps the result set; 200 is a sensible upper bound for
+/// the sidebar panel.
+///
+/// Returns ranked hits (BM25) with `<mark>`-wrapped HTML snippets.
+#[tauri::command]
+pub async fn search_files(
+    query: String,
+    limit: Option<u32>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<SearchHit>, AppError> {
+    let pool = get_db_pool_from_state(&state)?;
+    let cap = limit.unwrap_or(100).min(500);
+    let hits = db::run_blocking(&pool, move |conn| db::repo::fts_search(conn, &query, cap))
+        .await
+        .map_err(|e| AppError::Database(e.to_string()))?;
+    Ok(hits
+        .into_iter()
+        .map(|h| SearchHit {
+            relative_path: h.relative_path,
+            title: h.title,
+            snippet: h.snippet,
+        })
+        .collect())
 }

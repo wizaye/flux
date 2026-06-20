@@ -1,0 +1,43 @@
+{
+  "id": "canvas",
+  "name": "Canvas (Whiteboard)",
+  "version": "0.1.0",
+  "author": "Flux Core",
+  "description": "Infinite-canvas whiteboards powered by an in-house SVG renderer. Sketch, diagram, brainstorm. Files are plain JSON Canvas 1.0 (`*.canvas`) in your vault — round-trips with Obsidian.",
+  "minAppVersion": "0.1.0",
+  "apiVersion": "1.0",
+  "capabilities": {
+    "required": ["vault.read", "vault.write"],
+    "optional": ["workspace.notice"]
+  },
+  "contributes": {
+    "activityBarItem": {
+      "id": "canvas",
+      "iconUrl": "lucide:pencil-ruler",
+      "tooltip": "Canvas",
+      "placement": "left"
+    },
+    "sidebarPanel": {
+      "id": "canvas-panel",
+      "bundleUrl": "dist/sidebar.js",
+      "placement": "left"
+    },
+    "editorViews": [
+      {
+        "extensions": [".canvas"],
+        "bundleUrl": "dist/view.js"
+      }
+    ],
+    "commands": [
+      {
+        "id": "canvas.new",
+        "label": "Canvas: New whiteboard",
+        "palette": true
+      }
+    ],
+    "settingsPanel": {
+      "label": "Canvas",
+      "bundleUrl": "dist/settings.js"
+    }
+  }
+}

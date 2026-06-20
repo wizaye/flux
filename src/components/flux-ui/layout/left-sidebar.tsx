@@ -2,10 +2,12 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 import { BookmarksList } from "@/components/flux-ui/common/bookmarks-list";
 import { VaultSearchPanel } from "@/components/flux-ui/common/vault-search-panel";
+import { CalendarPanel } from "@/components/flux-ui/common/calendar-panel";
 import { IconButton } from "@/components/flux-ui/common/icon-button";
 import { useFileOperations } from "@/hooks/use-file-operations";
 import { useDirectoryOperations } from "@/hooks/use-directory-operations";
 import { useVaultOperations } from "@/hooks/use-vault-operations";
+import { usePluginStore } from "@/state/plugin-store";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/flux-ui/common/confirm-dialog";
 import { TrashDialog } from "@/components/flux-ui/modals/trash-dialog";
@@ -125,6 +127,10 @@ interface LeftSidebarProps {
   vaultTree?: FileNode[];
   /** Called when the user clicks a non-folder node in the vault tree. */
   onOpenFile?: (fileId: string) => void;
+  /** When set, the sidebar swaps its body for the named plugin's
+   *  sidebar panel instead of the built-in view. The activity-strip
+   *  toggles this on/off; LeftSidebar just reads it. */
+  activePluginPanel?: string | null;
 }
 
 export function LeftSidebar({
@@ -138,6 +144,7 @@ export function LeftSidebar({
   onOpenHelp,
   vaultTree,
   onOpenFile,
+  activePluginPanel,
 }: LeftSidebarProps) {
   const [inlineEdit, setInlineEdit] = React.useState<InlineEditState>(null);
   const [trashOpen, setTrashOpen] = React.useState(false);
@@ -180,13 +187,18 @@ export function LeftSidebar({
         onToggleSidebar={onToggleSidebar}
         isMac={isMac}
       />
-      <Toolbar
-        view={view}
-        onNewFile={() => setInlineEdit({ path: '', type: 'newFile' })}
-        onNewFolder={() => setInlineEdit({ path: '', type: 'newFolder' })}
-        onOpenTrash={() => setTrashOpen(true)}
-        onRefresh={() => { void refreshVault(); }}
-      />
+      {/* Built-in toolbar (new file / new folder / trash / refresh)
+          only applies to the file-tree views. Plugin panels render
+          their own toolbar inside the panel body. */}
+      {!activePluginPanel && (
+        <Toolbar
+          view={view}
+          onNewFile={() => setInlineEdit({ path: '', type: 'newFile' })}
+          onNewFolder={() => setInlineEdit({ path: '', type: 'newFolder' })}
+          onOpenTrash={() => setTrashOpen(true)}
+          onRefresh={() => { void refreshVault(); }}
+        />
+      )}
       <Body 
         view={view} 
         vaultTree={vaultTree} 
@@ -195,6 +207,7 @@ export function LeftSidebar({
         setInlineEdit={setInlineEdit}
         onInlineSubmit={handleInlineSubmit}
         onInlineCancel={() => setInlineEdit(null)}
+        activePluginPanel={activePluginPanel}
       />
       <Footer
         vaultName={vaultName}
@@ -439,6 +452,7 @@ function Body({
   setInlineEdit,
   onInlineSubmit,
   onInlineCancel,
+  activePluginPanel,
 }: {
   view: LeftView;
   vaultTree?: FileNode[];
@@ -447,7 +461,30 @@ function Body({
   setInlineEdit?: (val: InlineEditState) => void;
   onInlineSubmit?: (value: string) => void;
   onInlineCancel?: () => void;
+  activePluginPanel?: string | null;
 }) {
+  // Plugin sidebar takes precedence over the built-in view when set,
+  // matching the activity-strip's "only one icon active at a time"
+  // semantics. Pulled from the store so a registry mutation
+  // (install/uninstall) reflows the sidebar live.
+  const builtinComponents = usePluginStore((s) => s.builtinComponents);
+  if (activePluginPanel) {
+    const Panel = builtinComponents[activePluginPanel]?.sidebarPanel;
+    if (Panel) {
+      return (
+        <ScrollArea className="flex-1 min-h-0 [&>[data-slot=scroll-area-viewport]>div]:!block [&>[data-slot=scroll-area-viewport]>div]:!min-w-0 [&>[data-slot=scroll-area-viewport]>div]:!w-full">
+          <Panel />
+        </ScrollArea>
+      );
+    }
+    // External plugin (Phase C) — fall back to a placeholder until
+    // the lazy-import path lands.
+    return (
+      <div className="flex-1 flex items-center justify-center text-[12px] text-[var(--text-faint)]">
+        Loading plugin…
+      </div>
+    );
+  }
   return (
     // Force the Radix ScrollArea's internal viewport wrapper to behave
     // as a constrained block instead of its default `display: table;
@@ -480,20 +517,7 @@ function Body({
             description="Edit a file to see diffs appear here."
           />
         )}
-        {view === "calendar" && (
-          <SidebarEmpty
-            Icon={IcFolder}
-            title="Calendar panel"
-            description="Daily notes & journal entries — coming soon."
-          />
-        )}
-        {view === "canvas" && (
-          <SidebarEmpty
-            Icon={IcFolder}
-            title="No canvases yet"
-            description="Create a canvas to start a visual board."
-          />
-        )}
+        {view === "calendar" && <CalendarPanel />}
       </div>
     </ScrollArea>
   );

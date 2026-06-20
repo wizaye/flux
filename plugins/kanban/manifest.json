@@ -1,0 +1,48 @@
+{
+  "id": "kanban",
+  "name": "Kanban Board",
+  "version": "0.1.0",
+  "author": "Flux Core",
+  "description": "Jira-style work items with custom types, fields, parent/child links, swimlanes and saved filters. Boards live as `*.board.yaml` files in your vault; any Markdown note can link to work items via `[[Board.board#wi_…]]`.",
+  "minAppVersion": "0.1.0",
+  "apiVersion": "1.0",
+  "capabilities": {
+    "required": ["vault.read", "vault.write"],
+    "optional": ["workspace.notice"]
+  },
+  "contributes": {
+    "activityBarItem": {
+      "id": "kanban",
+      "iconUrl": "lucide:layout-grid",
+      "tooltip": "Kanban",
+      "placement": "left"
+    },
+    "sidebarPanel": {
+      "id": "kanban-panel",
+      "bundleUrl": "dist/sidebar.js",
+      "placement": "left"
+    },
+    "editorViews": [
+      {
+        "extensions": [".board.yaml", ".kanban.json", ".kanban.md", ".kanban"],
+        "bundleUrl": "dist/view.js"
+      }
+    ],
+    "commands": [
+      {
+        "id": "kanban.new-board",
+        "label": "Kanban: New board",
+        "palette": true
+      },
+      {
+        "id": "kanban.link-work-item",
+        "label": "Kanban: Link work item (insert link in this note)",
+        "palette": true
+      }
+    ],
+    "settingsPanel": {
+      "label": "Kanban",
+      "bundleUrl": "dist/settings.js"
+    }
+  }
+}

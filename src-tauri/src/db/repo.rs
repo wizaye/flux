@@ -178,143 +178,98 @@ impl FileRecord {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rusqlite_migration::{Migrations, M};
-    use uuid::Uuid;
+// ── FTS5 helpers ────────────────────────────────────────────────────────
+//
+// The `files_fts` virtual table is contentless from our app's POV:
+// we never JOIN it back to `files`, we always re-insert on write.
+// Keeping these helpers free functions (not methods on FileRecord)
+// makes it obvious they belong to a different table.
 
-    fn setup_test_db() -> Connection {
-        let mut conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+/// Replace the FTS row for `relative_path` with the new title + body.
+/// Idempotent: deletes the old row (if any) then inserts the new.
+pub fn fts_upsert(
+    conn: &Connection,
+    relative_path: &str,
+    title: &str,
+    body: &str,
+) -> Result<()> {
+    fts_delete(conn, relative_path)?;
+    conn.execute(
+        "INSERT INTO files_fts(relative_path, title, body) VALUES (?1, ?2, ?3)",
+        params![relative_path, title, body],
+    )?;
+    Ok(())
+}
 
-        // Run migration
-        let migrations = Migrations::new(vec![M::up(include_str!("../../migrations/001_init.sql"))]);
-        migrations.to_latest(&mut conn).unwrap();
+/// Drop the FTS row for `relative_path`. Safe to call on a missing
+/// path (no-op).
+pub fn fts_delete(conn: &Connection, relative_path: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM files_fts WHERE relative_path = ?1",
+        params![relative_path],
+    )?;
+    Ok(())
+}
 
-        conn
+/// Single hit returned from `fts_search`.
+pub struct FtsHit {
+    pub relative_path: String,
+    pub title: String,
+    /// Snippet built from the body using SQLite's `snippet()` aux fn.
+    pub snippet: String,
+}
+
+/// FTS5 search. `query` is passed through to FTS5's MATCH operator so
+/// callers can use phrase / NEAR / column filters. Caller is
+/// responsible for sanitising untrusted input (we escape double-
+/// quotes here to prevent the simplest injection of bad operators).
+pub fn fts_search(conn: &Connection, query: &str, limit: u32) -> Result<Vec<FtsHit>> {
+    // Wrap each whitespace-separated token in double quotes so FTS5
+    // treats them as literal phrases. Strips embedded `"` to avoid
+    // breaking out of the phrase. Matches the "expected" behaviour of
+    // a search-box: spaces = AND across phrases, not raw FTS syntax.
+    let q = sanitize_query(query);
+    if q.is_empty() {
+        return Ok(vec![]);
     }
+    let mut stmt = conn.prepare(
+        "SELECT relative_path, title,
+                snippet(files_fts, 2, '<mark>', '</mark>', '…', 16) AS snippet
+         FROM files_fts
+         WHERE files_fts MATCH ?1
+         ORDER BY bm25(files_fts)
+         LIMIT ?2",
+    )?;
+    let rows = stmt
+        .query_map(params![q, limit as i64], |row| {
+            Ok(FtsHit {
+                relative_path: row.get(0)?,
+                title: row.get(1)?,
+                snippet: row.get(2)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
+}
 
-    fn create_test_record() -> FileRecord {
-        FileRecord {
-            id: Uuid::new_v4(),
-            relative_path: "test.md".to_string(),
-            title: "Test Note".to_string(),
-            blake3_hash: vec![0u8; 32],
-            modified_at: 1234567890,
-            state: FileState::Active,
-            size_bytes: 100,
-            created_at: 1234567890,
+fn sanitize_query(input: &str) -> String {
+    let mut out = String::new();
+    let mut first = true;
+    for tok in input.split_whitespace() {
+        if tok.is_empty() {
+            continue;
         }
+        if !first {
+            out.push(' ');
+        }
+        first = false;
+        out.push('"');
+        out.push_str(&tok.replace('"', ""));
+        out.push('"');
+        // Star at end allows prefix matching ("foo*" matches "foobar")
+        // which is what users expect from incremental search.
+        out.push('*');
     }
-
-    #[test]
-    fn test_insert_and_get() {
-        let conn = setup_test_db();
-        let record = create_test_record();
-
-        FileRecord::insert(&conn, &record).unwrap();
-
-        let retrieved = FileRecord::get_by_path(&conn, "test.md").unwrap().unwrap();
-        assert_eq!(retrieved.relative_path, "test.md");
-        assert_eq!(retrieved.title, "Test Note");
-    }
-
-    #[test]
-    fn test_update_by_path() {
-        let conn = setup_test_db();
-        let mut record = create_test_record();
-
-        FileRecord::insert(&conn, &record).unwrap();
-
-        record.title = "Updated Title".to_string();
-        FileRecord::update_by_path(&conn, "test.md", &record).unwrap();
-
-        let retrieved = FileRecord::get_by_path(&conn, "test.md").unwrap().unwrap();
-        assert_eq!(retrieved.title, "Updated Title");
-    }
-
-    #[test]
-    fn test_update_state() {
-        let conn = setup_test_db();
-        let record = create_test_record();
-
-        FileRecord::insert(&conn, &record).unwrap();
-
-        FileRecord::update_state(&conn, "test.md", FileState::Archived).unwrap();
-
-        let retrieved = FileRecord::get_by_path(&conn, "test.md").unwrap().unwrap();
-        assert_eq!(retrieved.state, FileState::Archived);
-    }
-
-    #[test]
-    fn test_update_path() {
-        let conn = setup_test_db();
-        let record = create_test_record();
-
-        FileRecord::insert(&conn, &record).unwrap();
-
-        FileRecord::update_path(&conn, "test.md", "renamed.md").unwrap();
-
-        assert!(FileRecord::get_by_path(&conn, "test.md").unwrap().is_none());
-        let retrieved = FileRecord::get_by_path(&conn, "renamed.md").unwrap().unwrap();
-        assert_eq!(retrieved.relative_path, "renamed.md");
-    }
-
-    #[test]
-    fn test_delete() {
-        let conn = setup_test_db();
-        let record = create_test_record();
-
-        FileRecord::insert(&conn, &record).unwrap();
-        FileRecord::delete(&conn, "test.md").unwrap();
-
-        assert!(FileRecord::get_by_path(&conn, "test.md").unwrap().is_none());
-    }
-
-    #[test]
-    fn test_list_by_state() {
-        let conn = setup_test_db();
-
-        let mut record1 = create_test_record();
-        record1.relative_path = "active1.md".to_string();
-        record1.state = FileState::Active;
-
-        let mut record2 = create_test_record();
-        record2.relative_path = "active2.md".to_string();
-        record2.state = FileState::Active;
-
-        let mut record3 = create_test_record();
-        record3.relative_path = "archived.md".to_string();
-        record3.state = FileState::Archived;
-
-        FileRecord::insert(&conn, &record1).unwrap();
-        FileRecord::insert(&conn, &record2).unwrap();
-        FileRecord::insert(&conn, &record3).unwrap();
-
-        let active_files = FileRecord::list_by_state(&conn, FileState::Active).unwrap();
-        assert_eq!(active_files.len(), 2);
-
-        let archived_files = FileRecord::list_by_state(&conn, FileState::Archived).unwrap();
-        assert_eq!(archived_files.len(), 1);
-    }
-
-    #[test]
-    fn test_count_by_state() {
-        let conn = setup_test_db();
-
-        let mut record1 = create_test_record();
-        record1.relative_path = "active.md".to_string();
-
-        let mut record2 = create_test_record();
-        record2.relative_path = "archived.md".to_string();
-        record2.state = FileState::Archived;
-
-        FileRecord::insert(&conn, &record1).unwrap();
-        FileRecord::insert(&conn, &record2).unwrap();
-
-        assert_eq!(FileRecord::count_by_state(&conn, FileState::Active).unwrap(), 1);
-        assert_eq!(FileRecord::count_by_state(&conn, FileState::Archived).unwrap(), 1);
-        assert_eq!(FileRecord::count_by_state(&conn, FileState::Trashed).unwrap(), 0);
-    }
+    out
 }

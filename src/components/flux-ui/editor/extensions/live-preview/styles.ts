@@ -63,6 +63,49 @@ const baseStyles = EditorView.baseTheme({
     textDecoration: "none",
   },
 
+  // Work item chip — visually distinct from a regular wikilink so
+  // the user can tell at a glance "this points to a structured work
+  // item, not another note".
+  ".cm-lp-workitem": {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "5px",
+    padding: "0 6px 0 0",
+    height: "18px",
+    lineHeight: "18px",
+    borderRadius: "4px",
+    border: "1px solid color-mix(in srgb, var(--text-link) 35%, transparent)",
+    background: "color-mix(in srgb, var(--text-link) 10%, transparent)",
+    color: "var(--text-normal)",
+    fontSize: "0.92em",
+    verticalAlign: "baseline",
+    cursor: "pointer",
+    textDecoration: "none",
+  },
+  ".cm-lp-workitem:hover": {
+    background: "color-mix(in srgb, var(--text-link) 18%, transparent)",
+    borderColor: "color-mix(in srgb, var(--text-link) 55%, transparent)",
+  },
+  ".cm-lp-workitem-tag": {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: "20px",
+    height: "18px",
+    padding: "0 4px",
+    fontSize: "9.5px",
+    fontWeight: "600",
+    letterSpacing: "0.05em",
+    color: "white",
+    background: "var(--text-link)",
+    borderRadius: "3px 0 0 3px",
+    marginLeft: "-1px",
+  },
+  ".cm-lp-workitem-label": {
+    display: "inline-block",
+    lineHeight: "1",
+  },
+
   // Inline image — keep it bounded so a 4k image doesn't blow up the
   // editor viewport.
   ".cm-lp-image": {

@@ -105,8 +105,12 @@ export function useVaultOperations() {
   
   /**
    * Refresh vault info and file tree.
+   *
+   * `silent: true` skips the success toast — used by the watcher
+   * event listener so external edits don't spam the notification
+   * area with "Vault refreshed" pop-ups.
    */
-  const refreshVault = useCallback(async () => {
+  const refreshVault = useCallback(async (silent = false) => {
     try {
       const handle = await backend.getVaultInfo();
       setVaultHandle(handle);
@@ -121,7 +125,7 @@ export function useVaultOperations() {
         setLoadingTree(false);
       }
       
-      toast.success('Vault refreshed');
+      if (!silent) toast.success('Vault refreshed');
     } catch (error) {
       toast.error('Failed to refresh vault', {
         description: formatError(error),

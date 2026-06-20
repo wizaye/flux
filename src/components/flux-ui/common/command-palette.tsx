@@ -16,7 +16,6 @@ import {
   IcBookmark,
   IcSourceControl,
   IcCalendar,
-  IcGrid,
   IcNewFile,
   IcNewFolder,
   IcArrowRight,
@@ -29,6 +28,7 @@ import {
   IcBook,
 } from "@/components/flux-ui/common/icons";
 import { useTheme } from "@/components/theme-provider";
+import { usePluginStore } from "@/state/plugin-store";
 import { useSettingsStore, bindingLabel } from "@/state/settings-store";
 
 /**
@@ -41,7 +41,7 @@ import { useSettingsStore, bindingLabel } from "@/state/settings-store";
  * (cmdk + Dialog) instead of a hand-rolled overlay/css.
  */
 export type FluxCommandHandlers = {
-  onRouteView?: (view: "files" | "search" | "bookmarks" | "changes" | "calendar" | "canvas") => void;
+  onRouteView?: (view: "files" | "search" | "bookmarks" | "changes" | "calendar") => void;
   onToggleLeftSidebar?: () => void;
   onToggleRightSidebar?: () => void;
   onSplit?: (edge: "left" | "right" | "top" | "bottom") => void;
@@ -91,9 +91,6 @@ export function CommandPalette({
           </CommandItem>
           <CommandItem onSelect={() => run(() => handlers?.onRouteView?.("calendar"))}>
             <IcCalendar /> Open Calendar
-          </CommandItem>
-          <CommandItem onSelect={() => run(() => handlers?.onRouteView?.("canvas"))}>
-            <IcGrid /> Open Canvas
           </CommandItem>
         </CommandGroup>
 
@@ -154,8 +151,56 @@ export function CommandPalette({
             <IcHelp /> Help & Docs
           </CommandItem>
         </CommandGroup>
+
+        <PluginCommandsGroup runAndClose={run} />
         </CommandList>
       </Command>
     </CommandDialog>
+  );
+}
+
+/** Plugin-contributed palette commands. Rendered last so plugins
+ *  never reorder built-in entries. Hidden when no enabled plugin
+ *  contributes a `palette: true` command. */
+function PluginCommandsGroup({
+  runAndClose,
+}: {
+  runAndClose: (fn: () => void) => void;
+}) {
+  const paletteCommands = usePluginStore((s) => s.paletteCommands);
+  const builtinComponents = usePluginStore((s) => s.builtinComponents);
+  if (paletteCommands.length === 0) return null;
+  return (
+    <>
+      <CommandSeparator />
+      <CommandGroup heading="Plugins">
+        {paletteCommands.map(({ pluginId, command }) => (
+          <CommandItem
+            key={`${pluginId}-${command.id}`}
+            onSelect={() =>
+              runAndClose(() => {
+                // Built-in plugins ship a `commandHandlers` map; we
+                // call it directly. External plugins (Phase C) will
+                // get a `flux:plugin-command` window event their
+                // bundle subscribes to.
+                const handler =
+                  builtinComponents[pluginId]?.commandHandlers?.[command.id];
+                if (handler) {
+                  handler();
+                } else {
+                  window.dispatchEvent(
+                    new CustomEvent("flux:plugin-command", {
+                      detail: { pluginId, commandId: command.id },
+                    }),
+                  );
+                }
+              })
+            }
+          >
+            {command.label}
+          </CommandItem>
+        ))}
+      </CommandGroup>
+    </>
   );
 }

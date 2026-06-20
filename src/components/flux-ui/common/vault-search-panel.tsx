@@ -45,7 +45,7 @@ import {
 import { textNormal, textMuted, textFaint } from "@/lib/lattice-tokens";
 import { useVaultStore } from "@/state/vault-store";
 import type { FileNode } from "@/state/editor";
-import { isTauri, readFile } from "@/bindings";
+import { isTauri, readFile, searchFiles, type SearchHit } from "@/bindings";
 
 interface Match {
   /** 1-based line number for display. */
@@ -133,6 +133,36 @@ function flattenAllFiles(
   return out;
 }
 
+/** Decode an FTS5 `snippet()` result back into the `Match` shape the
+ *  result-card renderer expects. The Rust side wraps each match in
+ *  `<mark>…</mark>`; we strip the tags and record the byte range so
+ *  the same highlighter that handles the JS scanner can render it.
+ *  Line number is unknown (FTS doesn't track it) — show 1 as a
+ *  placeholder; clicking still opens the file. */
+function ftsHitToMatches(hit: SearchHit): Match[] {
+  const raw = hit.snippet;
+  const open = raw.indexOf("<mark>");
+  if (open < 0) {
+    return [{ line: 1, text: raw, matchStart: 0, matchEnd: 0 }];
+  }
+  const close = raw.indexOf("</mark>", open);
+  if (close < 0) {
+    return [{ line: 1, text: raw, matchStart: 0, matchEnd: 0 }];
+  }
+  const before = raw.slice(0, open);
+  const match = raw.slice(open + 6, close);
+  const after = raw.slice(close + 7);
+  const text = before + match + after;
+  return [
+    {
+      line: 1,
+      text,
+      matchStart: before.length,
+      matchEnd: before.length + match.length,
+    },
+  ];
+}
+
 function scanFile(
   body: string,
   needle: string,
@@ -217,6 +247,32 @@ export function VaultSearchPanel() {
     let cancelled = false;
     setScanning(true);
     const t = setTimeout(async () => {
+      // ── Native FTS5 path (real vault in Tauri) ─────────────────
+      // BM25-ranked snippets come back pre-highlighted with <mark>,
+      // which we strip + re-locate so the existing match-card
+      // renderer keeps working without an HTML-in-React detour.
+      if (isVaultOpen && isTauri) {
+        try {
+          const ftsHits = await searchFiles(query, 200);
+          if (cancelled) return;
+          const hits: FileHit[] = ftsHits.map((h: SearchHit) => {
+            const m = ftsHitToMatches(h);
+            return {
+              fileId: h.relativePath,
+              fileName:
+                h.relativePath.split(/[\\/]/).pop() ?? h.relativePath,
+              matches: m,
+            };
+          });
+          setResults(hits);
+          setScanning(false);
+          return;
+        } catch (err) {
+          console.warn("[search] FTS query failed, falling back:", err);
+          // fall through to the JS scanner below
+        }
+      }
+      // ── JS scanner fallback (browser preview / FTS error) ──────
       const candidates = flattenAllFiles(fileTree);
       if (isVaultOpen && isTauri) {
         await Promise.all(

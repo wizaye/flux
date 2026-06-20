@@ -11,7 +11,13 @@ import { VaultPicker } from "./components/flux-ui/modals/vault-picker";
 import { useVaultStore } from "./state/vault-store";
 import { useVaultOperations } from "./hooks/use-vault-operations";
 import { useThemeAndFontSync } from "./hooks/use-theme-and-font-sync";
+import { useFsWatcherSync } from "./hooks/use-fs-watcher-sync";
+import { useLinkIndexer } from "./hooks/use-link-indexer";
+import { registerBuiltinPlugins } from "./plugins/registry";
 import { getLastVaultPath, isTauri } from "./bindings";
+import { GlobalBusyOverlay } from "./components/flux-ui/common/global-busy-overlay";
+import { withBusy } from "./state/busy-store";
+import { usePluginStore } from "./state/plugin-store";
 
 function App() {
   // Theme + font-size synchronisation — applies the user's saved
@@ -37,6 +43,7 @@ function DetachedShellWrapper() {
     <TooltipProvider delayDuration={200}>
       <IconScale>
         <DetachedDocShell />
+        <GlobalBusyOverlay />
         <Toaster position="bottom-right" />
         <ErrorToaster />
       </IconScale>
@@ -45,6 +52,22 @@ function DetachedShellWrapper() {
 }
 
 function FullShell() {
+  // Register every built-in plugin into the store on first mount.
+  // Idempotent: subsequent renders are no-ops. Built-in plugins
+  // start DISABLED so the activity bar / sidebar stay clean until
+  // the user opts in from Settings → Community plugins.
+  React.useEffect(() => {
+    registerBuiltinPlugins();
+  }, []);
+
+  // Listen for backend `flux://fs-changed` events and quietly refresh
+  // the vault tree when external edits land. Hook is a no-op in
+  // browser preview (no Tauri runtime).
+  useFsWatcherSync();
+  // Bulk-scan + incrementally maintain the link/tag index that
+  // powers the backlinks panel + graph view.
+  useLinkIndexer();
+
   const isVaultOpen = useVaultStore((s) => s.isVaultOpen);
   const { openVault } = useVaultOperations();
   const [showVaultPicker, setShowVaultPicker] = React.useState(false);
@@ -67,11 +90,15 @@ function FullShell() {
         const last = await getLastVaultPath();
         if (cancelled) return;
         if (last) {
-          // Auto-reopen the most-recently-used vault. If it fails
-          // (deleted folder, permissions, etc.) fall through to the
-          // picker so the user can pick another one.
+          // Auto-reopen the most-recently-used vault under a global
+          // busy overlay so the user can't click around while the
+          // file tree + DB index are warming.
           try {
-            await openVault(last);
+            await withBusy(
+              "Opening vault\u2026",
+              () => openVault(last),
+              last,
+            );
           } catch {
             /* useVaultOperations already toasts the error */
           }
@@ -103,6 +130,7 @@ function FullShell() {
     <TooltipProvider delayDuration={200}>
       <IconScale>
         <LatticeShell />
+        <PluginAppRoots />
         <VaultPicker
           open={showVaultPicker && !isVaultOpen}
           onClose={() => setShowVaultPicker(false)}
@@ -111,9 +139,30 @@ function FullShell() {
             no richColors (too vibrant). Errors still render with the
             destructive icon via the custom `icons` map in `ui/sonner.tsx`. */}
         <Toaster position="bottom-right" />
-        <ErrorToaster />
-      </IconScale>
+        <ErrorToaster />        <GlobalBusyOverlay />      </IconScale>
     </TooltipProvider>
+  );
+}
+
+/**
+ * Mounts every enabled built-in plugin's optional `appRoot`
+ * component. Plugins use this slot for always-on UI (e.g. a
+ * link-picker dialog that the command palette can open without
+ * waiting for the sidebar to be visible).
+ */
+function PluginAppRoots() {
+  const plugins = usePluginStore((s) => s.plugins);
+  const builtinComponents = usePluginStore((s) => s.builtinComponents);
+  return (
+    <>
+      {plugins
+        .filter((p) => p.enabled && p.loaderKind === "builtin")
+        .map((p) => {
+          const Root = builtinComponents[p.id]?.appRoot;
+          if (!Root) return null;
+          return <Root key={p.id} />;
+        })}
+    </>
   );
 }
 

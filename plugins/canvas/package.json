@@ -1,0 +1,22 @@
+{
+  "name": "@flux/plugin-canvas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "First-party infinite-canvas plugin for Flux. In-house SVG renderer with select / pen / shapes / arrows / text / groups / strokes. Stores files as JSON Canvas 1.0 (`*.canvas`) — round-trips with Obsidian. shadcn-only chrome.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./manifest": "./manifest.json",
+    "./sidebar": "./src/sidebar.tsx",
+    "./view": "./src/view.tsx",
+    "./settings": "./src/settings.tsx"
+  },
+  "dependencies": {
+    "@flux/plugin-sdk": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "*",
+    "react-dom": "*"
+  }
+}

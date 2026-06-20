@@ -1,5 +1,42 @@
-# Logs
-logs
+# ─────────────────────────────────────────────────────────────────────────
+# Flux — root .gitignore
+#
+# Layered: keep this file focused on JS/TS host + workspace-wide noise.
+# Rust + Tauri build outputs live in `src-tauri/.gitignore`.
+# ─────────────────────────────────────────────────────────────────────────
+
+# ── Dependencies ─────────────────────────────────────────────────────────
+node_modules/
+.pnp.*
+.yarn/
+.pnpm-store/
+jspm_packages/
+
+# ── Build output (Vite, Vitest, TS) ──────────────────────────────────────
+dist/
+dist-ssr/
+build/
+out/
+*.tsbuildinfo
+.vite/
+.vite-cache/
+.cache/
+
+# ── Tests / coverage ─────────────────────────────────────────────────────
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+blob-report/
+__snapshots__/__diff_output__/
+
+# ── Lint / formatter caches ──────────────────────────────────────────────
+.eslintcache
+.stylelintcache
+.prettiercache
+
+# ── Logs ─────────────────────────────────────────────────────────────────
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -7,18 +44,63 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# ── Secrets / env ────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
 *.local
+.secret
+.secrets/
 
-# Editor directories and files
+# ── Editor / IDE ─────────────────────────────────────────────────────────
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
+!.vscode/settings.recommended.json
+.idea/
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+*~
+\#*\#
+.\#*
+
+# ── OS junk ──────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ── Tauri release artefacts (in case they leak out of src-tauri/target) ──
+*.app
+*.dmg
+*.deb
+*.rpm
+*.AppImage
+*.snap
+*.msi
+*.exe
+*.nsis
+*.zip
+*.tar.gz
+WixTools/
+
+# ── Per-developer local files ────────────────────────────────────────────
+*.local.json
+local.settings.json
+.history/
+.scratch/
+TODO.local.md
+
+# ── Flux runtime artefacts (never check in a real user vault) ────────────
+.zenvault/
+*.zenvault/
+

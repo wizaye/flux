@@ -458,6 +458,43 @@ export const MOCK_VAULT_TREE: FileNode[] = [
     content: DQOS_LLD_MD,
   },
   {
+    id: "/test.canvas",
+    name: "test.canvas",
+    kind: "canvas",
+    // Minimal JSON Canvas 1.0 fixture so the canvas plugin can
+    // render in browser preview without a real vault. Two text
+    // nodes + one arrow between them.
+    content: JSON.stringify(
+      {
+        nodes: [
+          {
+            id: "n1",
+            type: "text",
+            x: -200,
+            y: -60,
+            width: 220,
+            height: 80,
+            text: "Hello from the canvas plugin!",
+          },
+          {
+            id: "n2",
+            type: "text",
+            x: 120,
+            y: -60,
+            width: 220,
+            height: 80,
+            text: "Drag, draw, sketch.",
+          },
+        ],
+        edges: [
+          { id: "e1", fromNode: "n1", toNode: "n2", toEnd: "arrow" },
+        ],
+      },
+      null,
+      "\t",
+    ),
+  },
+  {
     id: "/graph",
     name: "Graph",
     kind: "graph",

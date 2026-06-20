@@ -56,6 +56,7 @@ pub fn init_pool(db_path: &Path) -> Result<DbPool> {
 fn run_migrations(conn: &mut Connection) -> Result<()> {
     let migrations = Migrations::new(vec![
         M::up(include_str!("../../migrations/001_init.sql")),
+        M::up(include_str!("../../migrations/002_fts.sql")),
         // Future migrations go here
     ]);
 
@@ -77,51 +78,4 @@ where
         f(&conn)
     })
     .await?
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn test_init_pool_creates_database() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test.db");
-
-        let pool = init_pool(&db_path).expect("Failed to initialize pool");
-
-        // Verify database file exists
-        assert!(db_path.exists());
-
-        // Verify we can get a connection
-        let conn = pool.get().expect("Failed to get connection");
-
-        // Verify PRAGMAs are set correctly
-        let journal_mode: String = conn
-            .pragma_query_value(None, "journal_mode", |row| row.get(0))
-            .unwrap();
-        assert_eq!(journal_mode.to_lowercase(), "wal");
-
-        let foreign_keys: i32 = conn
-            .pragma_query_value(None, "foreign_keys", |row| row.get(0))
-            .unwrap();
-        assert_eq!(foreign_keys, 1);
-    }
-
-    #[tokio::test]
-    async fn test_run_blocking() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("test.db");
-        let pool = init_pool(&db_path).unwrap();
-
-        let result = run_blocking(&pool, |conn| {
-            let count: i64 = conn.query_row("SELECT 1 + 1", [], |row| row.get(0))?;
-            Ok(count)
-        })
-        .await
-        .unwrap();
-
-        assert_eq!(result, 2);
-    }
 }

@@ -66,7 +66,12 @@ export function VaultPicker({ open, onClose }: VaultPickerProps) {
     
     setLoading(true);
     try {
-      await openVault(selectedPath);
+      const { withBusy } = await import("@/state/busy-store");
+      await withBusy(
+        "Opening vault\u2026",
+        () => openVault(selectedPath),
+        selectedPath,
+      );
       onClose?.();
     } catch (error) {
       console.error('Failed to open vault:', error);
@@ -94,7 +99,12 @@ export function VaultPicker({ open, onClose }: VaultPickerProps) {
       // Create full path: selectedPath/vaultName
       const fullPath = `${selectedPath}${selectedPath.endsWith('/') || selectedPath.endsWith('\\\\') ? '' : '/'}${vaultName}`;
 
-      await createVault(fullPath);
+      const { withBusy } = await import("@/state/busy-store");
+      await withBusy(
+        "Creating vault\u2026",
+        () => createVault(fullPath),
+        fullPath,
+      );
       onClose?.();
     } catch (error) {
       console.error('Failed to create vault:', error);
