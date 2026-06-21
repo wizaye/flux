@@ -5,7 +5,7 @@
 
 use crate::db::{self, repo::FileRecord};
 use crate::state::AppState;
-use crate::types::{AppError, EntryType, FileEntry, FileMetadata, FileState, FileTreeNode, MoveResult, RenameResult, SearchHit, TrashEntry};
+use crate::types::{AppError, ArchiveEntry, EntryType, FileEntry, FileMetadata, FileState, FileTreeNode, MoveResult, RenameResult, SearchHit, TrashEntry};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use uuid::Uuid;
 pub mod common;
 pub mod wikilink;
 
-use common::{get_db_pool_from_state, get_vault_path_from_state, validate_and_resolve_path};
+use common::{canonicalise_rel, get_db_pool_from_state, get_vault_path_from_state, validate_and_resolve_path};
 
 // ── File Operations ───────────────────────────────────────────────────────
 
@@ -159,43 +159,54 @@ pub async fn write_file(
     // Extract title from frontmatter or filename
     let title = extract_title(&content, &path);
 
+    // Canonicalise the relative path before it touches the DB. This
+    // collapses `notes\a.md` and `notes/a.md` into one key, and
+    // strips spurious leading/trailing slashes — without this, the
+    // UNIQUE constraint on `relative_path` trips when two saves of
+    // the same file arrive with different slash flavours (a real
+    // bug on Windows where the frontend emits backslashes).
+    let db_path = canonicalise_rel(&path);
+
     // Body capture for FTS upsert (clone-once into the closure). We
     // skip indexing non-text files via a coarse extension check —
     // images / binaries won't tokenise meaningfully.
     let body_for_fts = if is_indexable(&path) { content.clone() } else { String::new() };
     let title_for_fts = title.clone();
-    let path_for_fts = path.clone();
+    let path_for_fts = db_path.clone();
 
     db::run_blocking(&pool, move |conn| {
-        // Check if file exists in database
-        if let Some(mut record) = FileRecord::get_by_path(conn, &path)? {
-            // Update existing record
-            record.title = title;
-            record.blake3_hash = blake3_hash;
-            record.modified_at = modified_at;
-            record.size_bytes = size_bytes;
-            FileRecord::update_by_path(conn, &path, &record)?;
-        } else {
-            // Insert new record
-            let record = FileRecord {
-                id: Uuid::now_v7(),
-                relative_path: path,
-                title,
-                blake3_hash,
-                modified_at,
-                state: FileState::Active,
-                size_bytes,
-                created_at: modified_at,
-            };
-            FileRecord::insert(conn, &record)?;
-        }
+        // `FileRecord::insert` is now an UPSERT (ON CONFLICT(relative_path)
+        // DO UPDATE ...), so we always feed it a fresh record. For
+        // brand-new paths it inserts; for known paths SQLite applies
+        // the title/hash/modified/size updates atomically. This
+        // collapses the previous "fetch → branch → update OR insert"
+        // dance, which had a race window where two saves arriving
+        // back-to-back could both miss the existing row and try to
+        // insert.
+        let record = FileRecord {
+            id: Uuid::now_v7(),
+            relative_path: db_path,
+            title,
+            blake3_hash,
+            modified_at,
+            state: FileState::Active,
+            size_bytes,
+            created_at: modified_at,
+        };
+        FileRecord::insert(conn, &record)?;
         // Upsert FTS row (no-op body for non-indexable files just
         // removes them from search results, which is what we want).
         db::repo::fts_upsert(conn, &path_for_fts, &title_for_fts, &body_for_fts)?;
         Ok(())
     })
     .await
-    .map_err(|e| AppError::Database(e.to_string()))?;
+    // Best-effort: the file is already on disk by the time we reach
+    // here, so an index failure must NOT bubble up as "save failed".
+    // The DB is a derived cache; we'll re-index on the next save or
+    // a manual reindex. Log loudly so we still see the bug in dev.
+    .unwrap_or_else(|e| {
+        tracing::warn!("write_file: DB index update failed (FS op succeeded): {e}");
+    });
 
     Ok(())
 }
@@ -319,7 +330,7 @@ pub async fn delete_file(
     // operation. We log instead of returning so the user gets the
     // "moved to trash" they asked for.
     let pool = get_db_pool_from_state(&state)?;
-    let path_for_db = path.clone();
+    let path_for_db = canonicalise_rel(&path);
     if let Err(e) = db::run_blocking(&pool, move |conn| {
         FileRecord::update_state(conn, &path_for_db, FileState::Trashed)?;
         // Trashed files don't appear in search.
@@ -369,9 +380,9 @@ pub async fn move_file(
     // changed but the path key has, and `relative_path` is the FTS
     // join key the search panel filters on.
     let pool = get_db_pool_from_state(&state)?;
-    let dst_clone = dst.clone();
-    let src_for_db = src.clone();
-    let dst_for_fts = dst.clone();
+    let dst_clone = canonicalise_rel(&dst);
+    let src_for_db = canonicalise_rel(&src);
+    let dst_for_fts = dst_clone.clone();
     let dst_disk_path = dst_path.clone();
     if let Err(e) = db::run_blocking(&pool, move |conn| {
         FileRecord::update_path(conn, &src_for_db, &dst_clone)?;
@@ -514,12 +525,13 @@ pub async fn list_directory(
             }
         }
 
-        let relative = entry_path
-            .strip_prefix(&vault_path)
-            .map_err(|_| AppError::Other("Path resolution error".to_string()))?
-            .to_str()
-            .ok_or_else(|| AppError::Other("Invalid UTF-8 in path".to_string()))?
-            .to_string();
+        let relative = canonicalise_rel(
+            entry_path
+                .strip_prefix(&vault_path)
+                .map_err(|_| AppError::Other("Path resolution error".to_string()))?
+                .to_str()
+                .ok_or_else(|| AppError::Other("Invalid UTF-8 in path".to_string()))?,
+        );
 
         let name = entry
             .file_name()
@@ -727,13 +739,16 @@ fn build_tree_recursive(
             }
         }
 
-        // Calculate relative path from vault root (used as id for all operations)
-        let relative = path
-            .strip_prefix(vault_path)
-            .map_err(|_| AppError::Other("Path resolution error".to_string()))?
-            .to_str()
-            .ok_or_else(|| AppError::Other("Invalid UTF-8 in path".to_string()))?
-            .to_string();
+        // Calculate relative path from vault root (used as id for all operations).
+        // Canonicalised to forward-slashes so the frontend + DB
+        // never disagree about a Windows path's flavour.
+        let relative = canonicalise_rel(
+            path
+                .strip_prefix(vault_path)
+                .map_err(|_| AppError::Other("Path resolution error".to_string()))?
+                .to_str()
+                .ok_or_else(|| AppError::Other("Invalid UTF-8 in path".to_string()))?,
+        );
 
         let name = entry.file_name().to_str().unwrap().to_string();
         let modified_at = metadata
@@ -933,7 +948,7 @@ pub async fn restore_from_trash(
 
     // Flip the file's DB state back to Active.
     let pool = common::get_db_pool_from_state(&state)?;
-    let original_for_db = original_path_str.clone();
+    let original_for_db = canonicalise_rel(&original_path_str);
     let _ = db::run_blocking(&pool, move |conn| {
         FileRecord::update_state(conn, &original_for_db, FileState::Active)
     })
@@ -1004,4 +1019,228 @@ pub async fn search_files(
             snippet: h.snippet,
         })
         .collect())
+}
+
+// ── Archive ───────────────────────────────────────────────────────────────
+//
+// Archive is a soft-retire bucket separate from trash. The semantic
+// distinction we surface to users:
+//
+//   • Delete  → `.trash/YYYY-MM/<file>`   — scheduled for janitor purge
+//   • Archive → `.archive/<original/path>` — kept indefinitely, intent
+//                                            is "out of sight, not gone"
+//
+// Unlike trash, archive preserves the file's full original directory
+// structure verbatim (no month bucketing). Restoring is just the
+// reverse rename. Archive supports BOTH files and directories — the
+// folder context menu uses this for "Archive folder".
+
+/// Archive a file or directory by moving it to `.archive/<original>`.
+///
+/// Returns the new path inside `.archive/`. Fails with `AlreadyExists`
+/// if the destination is taken — the user has to clear the colliding
+/// archive entry first (intentional: silently overwriting would lose
+/// data).
+#[tauri::command]
+pub async fn archive_file(
+    path: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, AppError> {
+    let vault_path = get_vault_path_from_state(&state)?;
+    let src = validate_and_resolve_path(&vault_path, &path)?;
+
+    if !src.exists() {
+        return Err(AppError::NotFound(path));
+    }
+    // Block archiving inside `.archive/` or `.trash/` so users can't
+    // recursively bury already-archived content.
+    let norm = path.replace('\\', "/");
+    if norm.starts_with(".archive/") || norm == ".archive"
+        || norm.starts_with(".trash/") || norm == ".trash"
+    {
+        return Err(AppError::InvalidPath(
+            "Cannot archive items already in .archive or .trash".to_string(),
+        ));
+    }
+
+    let archive_root = vault_path.join(".archive");
+    tokio::fs::create_dir_all(&archive_root).await?;
+
+    let dest = archive_root.join(&path);
+    if dest.exists() {
+        return Err(AppError::AlreadyExists(format!(".archive/{path}")));
+    }
+    if let Some(parent) = dest.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::rename(&src, &dest).await?;
+
+    // Best-effort DB index update — file rows flip to Archived, FTS
+    // drops them so they don't surface in search. Folder archives
+    // touch every descendant row.
+    let pool = get_db_pool_from_state(&state)?;
+    let path_for_db = canonicalise_rel(&path);
+    let is_dir_for_db = dest.is_dir();
+    if let Err(e) = db::run_blocking(&pool, move |conn| {
+        if is_dir_for_db {
+            // Update every row whose `relative_path` lives under
+            // the archived folder.
+            let prefix = format!("{}/", path_for_db);
+            conn.execute(
+                "UPDATE files SET state = 'archived' WHERE relative_path = ?1 OR relative_path LIKE ?2",
+                rusqlite::params![path_for_db, format!("{}%", prefix)],
+            )?;
+            // FTS purge for every match.
+            conn.execute(
+                "DELETE FROM files_fts WHERE relative_path = ?1 OR relative_path LIKE ?2",
+                rusqlite::params![path_for_db, format!("{}%", prefix)],
+            )?;
+        } else {
+            FileRecord::update_state(conn, &path_for_db, FileState::Archived)?;
+            db::repo::fts_delete(conn, &path_for_db)?;
+        }
+        Ok(())
+    })
+    .await
+    {
+        tracing::warn!("archive_file: DB index update failed (FS op succeeded): {e}");
+    }
+
+    let dest_rel = dest
+        .strip_prefix(&vault_path)
+        .map_err(|_| AppError::Other("Path resolution error".to_string()))?
+        .to_string_lossy()
+        .replace('\\', "/");
+    Ok(dest_rel)
+}
+
+/// List every entry currently under `.archive/`. Returns directories
+/// too (so the UI can render a tree if it wants); the `is_dir` flag
+/// distinguishes them.
+#[tauri::command]
+pub async fn list_archive(
+    state: State<'_, Arc<AppState>>,
+) -> Result<Vec<ArchiveEntry>, AppError> {
+    let vault_path = get_vault_path_from_state(&state)?;
+    let archive_root = vault_path.join(".archive");
+
+    if !archive_root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries: Vec<ArchiveEntry> = Vec::new();
+    let mut stack = vec![archive_root.clone()];
+    while let Some(dir) = stack.pop() {
+        let mut iter = tokio::fs::read_dir(&dir).await?;
+        while let Some(entry) = iter.next_entry().await? {
+            let path = entry.path();
+            let metadata = entry.metadata().await?;
+            let is_dir = metadata.is_dir();
+            if is_dir {
+                stack.push(path.clone());
+            }
+
+            let archive_rel = path
+                .strip_prefix(&vault_path)
+                .map_err(|_| AppError::Other("Path resolution error".to_string()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let original_rel = path
+                .strip_prefix(&archive_root)
+                .map_err(|_| AppError::Other("Path resolution error".to_string()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("(unnamed)")
+                .to_string();
+
+            let archived_at = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+
+            entries.push(ArchiveEntry {
+                archive_path: archive_rel,
+                original_path: original_rel,
+                name,
+                size: if is_dir { 0 } else { metadata.len() },
+                is_dir,
+                archived_at,
+            });
+        }
+    }
+
+    // Newest first.
+    entries.sort_by(|a, b| b.archived_at.cmp(&a.archived_at));
+    Ok(entries)
+}
+
+/// Restore an archived file/folder to its original location.
+/// Symmetric inverse of `archive_file`. Fails on collision.
+#[tauri::command]
+pub async fn restore_from_archive(
+    archive_path: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<String, AppError> {
+    let vault_path = get_vault_path_from_state(&state)?;
+    let archived = validate_and_resolve_path(&vault_path, &archive_path)?;
+
+    if !archived.exists() {
+        return Err(AppError::NotFound(archive_path));
+    }
+
+    let archive_rel = archived
+        .strip_prefix(&vault_path)
+        .map_err(|_| AppError::InvalidPath("Path outside vault".to_string()))?;
+    let mut components = archive_rel.components();
+    let dot_archive = components.next();
+    if dot_archive.and_then(|c| c.as_os_str().to_str()) != Some(".archive") {
+        return Err(AppError::InvalidPath(
+            "Path is not inside .archive/".to_string(),
+        ));
+    }
+    let original_rel: std::path::PathBuf = components.collect();
+    if original_rel.as_os_str().is_empty() {
+        return Err(AppError::InvalidPath(
+            "Cannot determine original path".to_string(),
+        ));
+    }
+    let destination = vault_path.join(&original_rel);
+
+    if destination.exists() {
+        return Err(AppError::AlreadyExists(
+            original_rel.to_string_lossy().to_string(),
+        ));
+    }
+    if let Some(parent) = destination.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::rename(&archived, &destination).await?;
+
+    let original_str = canonicalise_rel(&original_rel.to_string_lossy());
+
+    // Flip DB state back to Active (best-effort).
+    let pool = get_db_pool_from_state(&state)?;
+    let original_for_db = original_str.clone();
+    let is_dir_for_db = destination.is_dir();
+    let _ = db::run_blocking(&pool, move |conn| {
+        if is_dir_for_db {
+            let prefix = format!("{}/", original_for_db);
+            conn.execute(
+                "UPDATE files SET state = 'active' WHERE relative_path = ?1 OR relative_path LIKE ?2",
+                rusqlite::params![original_for_db, format!("{}%", prefix)],
+            )?;
+        } else {
+            FileRecord::update_state(conn, &original_for_db, FileState::Active)?;
+        }
+        Ok(())
+    })
+    .await;
+
+    Ok(original_str)
 }

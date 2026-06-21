@@ -840,6 +840,19 @@ export function LatticeShell() {
           window.dispatchEvent(new CustomEvent("flux-focus-search"));
         });
       }
+      if (matchesBinding(e, hotkeys.toggleVimMode)) {
+        e.preventDefault();
+        // Read-then-flip via the store so subscribers (the editor's
+        // CodeMirror extension + the status pill badge) react in the
+        // same tick. Toast the new state — vim mode is invisible
+        // until you type, so a confirmation reduces surprise.
+        const settings = useSettingsStore.getState();
+        const next = !settings.vimMode;
+        settings.setVimMode(next);
+        void import("sonner").then(({ toast }) => {
+          toast.success(`Vim mode ${next ? "enabled" : "disabled"}`);
+        });
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -1233,7 +1246,7 @@ export function LatticeShell() {
       </div>
 
       {/* ===== Floating status pill (bottom-right) ===== */}
-      <StatusPill empty />
+      <StatusPill />
 
       {/* Custom Win/Linux Min/Max/Close cluster (hidden on macOS).
           Tauri runs with `decorations: false` + `titleBarStyle:

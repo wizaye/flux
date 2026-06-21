@@ -61,3 +61,42 @@ pub fn validate_and_resolve_path(vault_path: &Path, relative: &str) -> Result<Pa
 
     Ok(full_path)
 }
+
+/// Canonicalise a vault-relative path for DB / index keys.
+///
+/// Two flavours of the same path collide on the SQLite UNIQUE
+/// constraint — `"notes/a.md"` and `"notes\\a.md"` are the same
+/// file on disk but two distinct strings to the index. Worse, the
+/// frontend sometimes emits one form and the watcher emits the
+/// other, so an "insert if missing" check fails to find the existing
+/// row and triggers UNIQUE-violations or duplicate inserts.
+///
+/// We collapse:
+///   • backslashes → forward slashes
+///   • repeated slashes (`a//b` → `a/b`)
+///   • leading slash (`/a/b` → `a/b`)
+///   • trailing slash (`a/b/` → `a/b`)
+///
+/// We deliberately do NOT lowercase: macOS / Linux are case-sensitive
+/// so `Notes/A.md` and `notes/a.md` are different files. Windows
+/// filesystems usually fold case but treating "physics.md" and
+/// "Physics.md" as the same row would lose data on case-sensitive
+/// platforms.
+pub fn canonicalise_rel(path: &str) -> String {
+    let slashed = path.replace('\\', "/");
+    let mut out = String::with_capacity(slashed.len());
+    let mut prev_slash = false;
+    for ch in slashed.chars() {
+        if ch == '/' {
+            if prev_slash {
+                continue;
+            }
+            prev_slash = true;
+        } else {
+            prev_slash = false;
+        }
+        out.push(ch);
+    }
+    let trimmed = out.trim_start_matches('/').trim_end_matches('/');
+    trimmed.to_string()
+}

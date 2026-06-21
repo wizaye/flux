@@ -1,0 +1,83 @@
+# ─────────────────────────────────────────────────────────────────────────
+# .gitattributes — normalise line endings, mark generated/binary files
+#
+# Goal: keep diffs sane across Windows/macOS/Linux and stop binary
+# release artefacts (if they ever slip past .gitignore) from clogging
+# diffs / forcing big LFS migrations later.
+# ─────────────────────────────────────────────────────────────────────────
+
+# Default: normalise to LF on commit, restore platform-native on checkout.
+* text=auto eol=lf
+
+# ── Explicit text (always LF, diffable) ─────────────────────────────────
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.js        text eol=lf
+*.jsx       text eol=lf
+*.mjs       text eol=lf
+*.cjs       text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+*.html      text eol=lf
+*.css       text eol=lf
+*.scss      text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.toml      text eol=lf
+*.rs        text eol=lf
+*.sql       text eol=lf
+*.sh        text eol=lf eol=lf
+
+# Windows-only scripts keep CRLF.
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+
+# ── Generated / lockfiles — collapse in diffs ──────────────────────────
+pnpm-lock.yaml      linguist-generated=true -diff
+package-lock.json   linguist-generated=true -diff
+yarn.lock           linguist-generated=true -diff
+src-tauri/Cargo.lock linguist-generated=true -diff
+src/bindings.ts     linguist-generated=true
+
+# ── Binary assets (never try to diff or auto-CRLF) ─────────────────────
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.webp      binary
+*.ico       binary
+*.icns      binary
+*.pdf       binary
+*.woff      binary
+*.woff2     binary
+*.ttf       binary
+*.otf       binary
+*.mp3       binary
+*.mp4       binary
+*.wav       binary
+*.zip       binary
+*.tar.gz    binary
+*.7z        binary
+
+# ── Tauri / Cargo release blobs — explicitly binary so any accidental
+#    `git add` makes the bloat obvious in code review instead of
+#    silently merging as "text". (.gitignore should keep these out
+#    in the first place; this is the second line of defence.)
+*.exe       binary
+*.dll       binary
+*.so        binary
+*.dylib     binary
+*.a         binary
+*.lib       binary
+*.o         binary
+*.obj       binary
+*.rlib      binary
+*.app       binary
+*.dmg       binary
+*.deb       binary
+*.rpm       binary
+*.snap      binary
+*.AppImage  binary
+*.msi       binary
+*.pdb       binary

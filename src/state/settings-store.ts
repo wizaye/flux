@@ -30,7 +30,8 @@ export type HotkeyId =
   | "openSettings"
   | "toggleLeftSidebar"
   | "toggleRightSidebar"
-  | "globalSearch";
+  | "globalSearch"
+  | "toggleVimMode";
 
 /** Human-readable label shown in the Hotkeys settings panel. */
 export const HOTKEY_LABELS: Record<HotkeyId, string> = {
@@ -39,6 +40,7 @@ export const HOTKEY_LABELS: Record<HotkeyId, string> = {
   toggleLeftSidebar: "Toggle left sidebar",
   toggleRightSidebar: "Toggle right sidebar",
   globalSearch: "Search across all notes",
+  toggleVimMode: "Toggle Vim mode",
 };
 
 /** Factory — build a binding from its constituent parts. */
@@ -115,6 +117,18 @@ export const DEFAULT_HOTKEYS: Record<HotkeyId, HotkeyBinding> = {
   // editor. We route it to the global left-sidebar search (VS Code /
   // Obsidian style) instead of CM's inline-bottom search bar.
   globalSearch: makeBinding("f", { metaKey: true }),
+  // F9 toggles vim mode. We picked a bare function key because every
+  // Cmd/Ctrl+<letter> combo collides with something on at least one
+  // OS or in the browser:
+  //   • Cmd/Ctrl+Alt+V — Paste Special (Office), Paste & Match Style (macOS)
+  //   • Cmd/Ctrl+Shift+V — Paste Without Formatting (Chrome/Edge)
+  //   • Alt+V — View menu (Windows apps)
+  //   • F8 — Snipping Tool screenshot shortcut on some Windows
+  //     keyboards; also "Safe Mode" in the Windows boot menu.
+  // F9 is unbound in Chrome / Edge / Firefox AND at the system level
+  // on both Windows + macOS (Mission Control defaults to F3, not F9).
+  // The status pill picks up the change and shows / hides the VIM badge.
+  toggleVimMode: makeBinding("f9"),
 };
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -192,6 +206,24 @@ export const useSettingsStore = create<SettingsState>()(
       resetAllHotkeys: () => set({ hotkeys: { ...DEFAULT_HOTKEYS } }),
     }),
     { name: "flux-settings",
+      // Versioned migrations replace persisted state when the saved
+      // version is older than `version`. Bump this whenever a
+      // default hotkey changes so existing users pick up the new
+      // binding instead of being stuck on the previous one.
+      version: 3,
+      migrate: (persisted, fromVersion) => {
+        const p = (persisted as Partial<SettingsState>) ?? {};
+        // v1 → v2 dropped the Cmd+Alt+V default (Paste-Special clash).
+        // v2 → v3 dropped the F8 default (Snipping Tool / boot menu).
+        // In both cases the fix is the same: drop the stale binding
+        // so the new default takes hold.
+        if (fromVersion < 3 && p.hotkeys && "toggleVimMode" in p.hotkeys) {
+          const { toggleVimMode: _, ...rest } = p.hotkeys;
+          void _;
+          return { ...p, hotkeys: rest } as SettingsState;
+        }
+        return p as SettingsState;
+      },
       // Merge user-saved hotkeys with defaults so adding a new
       // command (e.g. `globalSearch` in 0.x) doesn't leave older
       // localStorage rows missing the new key — which would crash

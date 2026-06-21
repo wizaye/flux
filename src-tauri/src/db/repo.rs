@@ -21,11 +21,27 @@ pub struct FileRecord {
 }
 
 impl FileRecord {
-    /// Insert a new file record.
+    /// Insert (or upsert) a file record. Uses
+    /// `ON CONFLICT(relative_path)` so a redundant insert never
+    /// fails with a UNIQUE-constraint error — common when the
+    /// frontend retries a save after a transient FS error, or when
+    /// the canonical-path normalisation collapses two casings.
+    ///
+    /// Behaviour:
+    ///   • New path → fresh row with the provided UUID.
+    ///   • Existing path → updates everything EXCEPT the original
+    ///     `id` and `created_at` (preserves stable identity even
+    ///     when the user manually edits the file off-app).
     pub fn insert(conn: &Connection, record: &FileRecord) -> Result<()> {
         conn.execute(
             "INSERT INTO files (id, relative_path, title, blake3_hash, modified_at, state, size_bytes, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(relative_path) DO UPDATE SET
+                title = excluded.title,
+                blake3_hash = excluded.blake3_hash,
+                modified_at = excluded.modified_at,
+                state = excluded.state,
+                size_bytes = excluded.size_bytes",
             params![
                 record.id.as_bytes(),
                 &record.relative_path,

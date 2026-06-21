@@ -87,6 +87,15 @@ export interface TrashEntry {
   trashedAt: number;
 }
 
+export interface ArchiveEntry {
+  archivePath: string;
+  originalPath: string;
+  name: string;
+  size: number;
+  isDir: boolean;
+  archivedAt: number;
+}
+
 // ── Vault Commands ────────────────────────────────────────────────────────
 
 export async function openVault(path: string): Promise<VaultHandle> {
@@ -231,6 +240,25 @@ export async function restoreFromTrash(trashPath: string): Promise<string> {
 
 export async function purgeTrashEntry(trashPath: string): Promise<void> {
   return await invoke('purge_trash_entry', { trashPath });
+}
+
+// ── Archive Commands ──────────────────────────────────────────
+//
+// Archive is a "soft retire" bucket separate from trash. Items go
+// to `.archive/<original/path>` and stay until the user restores
+// or hard-deletes them. The folder context menu's "Archive folder"
+// option uses these.
+
+export async function archiveFile(path: string): Promise<string> {
+  return await invoke('archive_file', { path });
+}
+
+export async function listArchive(): Promise<ArchiveEntry[]> {
+  return await invoke('list_archive');
+}
+
+export async function restoreFromArchive(archivePath: string): Promise<string> {
+  return await invoke('restore_from_archive', { archivePath });
 }
 
 // ── Link / tag indexer ───────────────────────────────────────────────────

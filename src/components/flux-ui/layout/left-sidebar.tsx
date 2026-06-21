@@ -59,6 +59,7 @@ import {
 } from "@/components/ui/item";
 import { Kbd } from "@/components/ui/kbd";
 import {
+  IcArchive,
   IcBookmark,
   IcChevronDown,
   IcCollapseAll,
@@ -625,7 +626,7 @@ function VaultTreeNode({
   const [isDropTarget, setIsDropTarget] = React.useState(false);
   const [highlightPulse, setHighlightPulse] = React.useState(false);
   const rowRef = React.useRef<HTMLLIElement | null>(null);
-  const { deleteFile, moveFile } = useFileOperations();
+  const { deleteFile, archiveFile, moveFile } = useFileOperations();
   const isFolder = node.kind === "folder";
 
   // "Reveal in navigation" listener — dispatched by the doc-header's
@@ -698,6 +699,17 @@ function VaultTreeNode({
     // The store mutator inside `deleteFile` removes the node from
     // the tree surgically; no full vault refresh required.
     await deleteFile(node.id);
+  };
+
+  const handleArchive = async () => {
+    // Archive is the "soft retire" sibling of Delete. We don't
+    // confirm: the operation is fully reversible (Restore from
+    // archive), and the toast tells the user where it went.
+    try {
+      await archiveFile(node.id);
+    } catch {
+      /* useFileOperations already toasted */
+    }
   };
 
   const handleCopyPath = () => {
@@ -863,12 +875,15 @@ function VaultTreeNode({
             <IcPencil /> Rename…
             <ContextMenuShortcut>F2</ContextMenuShortcut>
           </ContextMenuItem>
+          <ContextMenuItem onSelect={handleArchive}>
+            <IcArchive /> {isFolder ? "Archive folder" : "Archive"}
+          </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem
             variant="destructive"
             onSelect={() => setConfirmOpen(true)}
           >
-            <IcTrash /> Delete
+            <IcTrash /> {isFolder ? "Move folder to trash" : "Move to trash"}
             <ContextMenuShortcut>⌫</ContextMenuShortcut>
           </ContextMenuItem>
         </ContextMenuContent>

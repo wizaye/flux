@@ -22,6 +22,56 @@ out/
 .vite-cache/
 .cache/
 
+# ── Cargo build output (any crate, anywhere in the workspace) ────────────
+# src-tauri/.gitignore handles its own /target/ specifically; this rule
+# is a safety net so any future Rust crate (plugin sidecar, helper
+# binary, examples/) under the workspace can't accidentally commit
+# multi-GB compile artefacts.
+target/
+**/target/
+**/Cargo.lock.bak
+**/*.rs.bk
+
+# ── Tauri release artefacts (release binaries / installers / bundles) ────
+# These can be hundreds of MB each. NEVER commit them — release flows
+# upload to GitHub Releases or an artifact store, not the repo.
+release/
+releases/
+bundle/
+bundles/
+**/target/release/
+**/target/debug/
+**/target/aarch64-*/
+**/target/x86_64-*/
+**/target/wasm32-*/
+src-tauri/gen/schemas/
+
+# ── Large binary artefacts (catch-all by extension) ──────────────────────
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.o
+*.obj
+*.pdb
+*.rlib
+*.rmeta
+*.app
+*.dmg
+*.pkg
+*.deb
+*.rpm
+*.snap
+*.AppImage
+*.msi
+*.nsis
+*.wixpdb
+*.wixobj
+WixTools/
+
+
 # ── Tests / coverage ─────────────────────────────────────────────────────
 coverage/
 .nyc_output/
@@ -80,18 +130,13 @@ Desktop.ini
 $RECYCLE.BIN/
 
 # ── Tauri release artefacts (in case they leak out of src-tauri/target) ──
-*.app
-*.dmg
-*.deb
-*.rpm
-*.AppImage
-*.snap
-*.msi
-*.exe
-*.nsis
-*.zip
+# Kept loose so anything that ends up at the workspace root is also
+# rejected. Extension list intentionally overlaps with the Cargo block
+# above — git only needs to match once.
 *.tar.gz
-WixTools/
+*.tar.xz
+*.zip
+*.7z
 
 # ── Per-developer local files ────────────────────────────────────────────
 *.local.json

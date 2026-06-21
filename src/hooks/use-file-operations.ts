@@ -102,6 +102,34 @@ export function useFileOperations() {
   }, []);
 
   /**
+   * Archive a file or folder. Soft-retire: contents move under
+   * `.archive/<original/path>` and stay until the user restores
+   * or hard-deletes them. Distinct from delete — archive does NOT
+   * surface for janitor purge. Folder archives close every tab
+   * underneath.
+   */
+  const archiveFile = useCallback(async (path: string) => {
+    try {
+      const newPath = await backend.archiveFile(path);
+      getTabSyncHandlers()?.closeTabsForFile(path);
+      const store = useVaultStore.getState();
+      store.removeFileContent(path);
+      store.markClean(path);
+      useEditorStore.getState().markClean(path);
+      store.removeNodeFromTree(path);
+      toast.success(`Archived: ${path}`, {
+        description: `Moved to ${newPath}`,
+      });
+      return newPath;
+    } catch (error) {
+      toast.error(`Failed to archive`, {
+        description: formatError(error),
+      });
+      throw error;
+    }
+  }, []);
+
+  /**
    * Move a file to a new location. Updates open tabs to track the
    * new path so the editor doesn't end up holding a dangling ref.
    */
@@ -184,6 +212,7 @@ export function useFileOperations() {
     saveFile,
     createFile,
     deleteFile,
+    archiveFile,
     moveFile,
     renameFile,
   };

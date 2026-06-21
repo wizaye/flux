@@ -45,6 +45,9 @@ pub fn run() {
             commands::fs::list_trash,
             commands::fs::restore_from_trash,
             commands::fs::purge_trash_entry,
+            commands::fs::archive_file,
+            commands::fs::list_archive,
+            commands::fs::restore_from_archive,
             // Link / tag indexer
             commands::links::scan_vault_links,
             commands::links::scan_vault_links_subset,

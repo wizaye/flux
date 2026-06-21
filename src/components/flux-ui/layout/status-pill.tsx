@@ -21,6 +21,15 @@ import {
   hoverText,
   errorText,
 } from "@/lib/lattice-tokens";
+import { useTabSyncStore } from "@/state/tab-sync-store";
+import { useVaultStore } from "@/state/vault-store";
+import { useEditorStore } from "@/state/editor-store";
+import { useSettingsStore } from "@/state/settings-store";
+import {
+  useLinkIndexStore,
+  selectBacklinks,
+} from "@/state/link-index-store";
+import type { FileNode } from "@/state/editor";
 
 /**
  * Floating bottom-right status pill. Two render states:
@@ -50,14 +59,19 @@ const VIM_COLOR: Record<VimMode, string> = {
 };
 
 const VIM_LABEL: Record<VimMode, string> = {
+  // "VIM" is the resting label — communicates "vim is enabled" to a
+  // reader who doesn't know modal-editor jargon. Once the user moves
+  // into an actual non-normal mode, switch to the standard
+  // INS / VIS / RPL chips.
+  normal: "VIM",
   insert: "INS",
   visual: "VIS",
   replace: "RPL",
-  normal: "NOR",
 };
 
 export interface StatusPillProps {
-  /** True when no document is active — shows the compact pill. */
+  /** True when no document is active — shows the compact pill.
+   *  When omitted, derived from `useTabSyncStore.activeFile`. */
   empty?: boolean;
   backlinkCount?: number;
   wordCount?: number;
@@ -69,18 +83,114 @@ export interface StatusPillProps {
   onSyncClick?: () => void;
 }
 
+/** Count whitespace-separated words. Strips fenced code blocks and
+ *  HTML comments so the count tracks "prose the reader will see"
+ *  rather than raw markdown bytes — same heuristic as lattice. */
+function countWords(text: string): number {
+  if (!text) return 0;
+  // Strip ```fenced``` blocks and <!-- comments -->.
+  const stripped = text
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/<!--[\s\S]*?-->/g, "");
+  const m = stripped.match(/\S+/g);
+  return m ? m.length : 0;
+}
+
+/** Derive the source-of-truth body for the active file. Priority:
+ *    1. live edits (`useEditorStore.fileContents`)
+ *    2. content loaded from disk (`useVaultStore.openFiles`)
+ *    3. mock-vault inline `FileNode.content` (browser-preview)
+ *
+ *  Falling back to (3) keeps the word/char counters honest when the
+ *  app runs without a real vault — the mock files carry their body
+ *  inline on the tree node, not in the per-path content maps. */
+function useActiveFileBody(fileId: string | null): string {
+  const editorContents = useEditorStore((s) => s.fileContents);
+  const vaultContents = useVaultStore((s) => s.openFiles);
+  const fileTree = useVaultStore((s) => s.fileTree);
+  if (!fileId) return "";
+  const fromEditor = editorContents.get(fileId);
+  if (fromEditor !== undefined) return fromEditor;
+  const fromVault = vaultContents.get(fileId);
+  if (fromVault !== undefined) return fromVault;
+  return findInlineContent(fileTree, fileId) ?? "";
+}
+
+function findInlineContent(tree: FileNode[], id: string): string | undefined {
+  for (const n of tree) {
+    if (n.id === id) return n.content;
+    if (n.children) {
+      const hit = findInlineContent(n.children, id);
+      if (hit !== undefined) return hit;
+    }
+  }
+  return undefined;
+}
+
 export function StatusPill({
-  empty,
+  empty: emptyOverride,
   backlinkCount,
   wordCount,
   charCount,
   syncState = "ok",
-  dirtyCount = 0,
+  dirtyCount,
   onSyncClick,
 }: StatusPillProps) {
   const [vim, setVim] = React.useState<VimMode>("normal");
 
+  // Active file (may be null) drives every counter.
+  const activeFile = useTabSyncStore((s) => s.activeFile);
+  const fileId = activeFile?.fileId ?? null;
+
+  // Word + character count come from whatever doc the editor /
+  // vault store currently holds for the active file.
+  const body = useActiveFileBody(fileId);
+  const derivedWords = React.useMemo(() => countWords(body), [body]);
+  const derivedChars = body.length;
+
+  // Backlinks: pull the inverse map and run the same selector the
+  // right sidebar uses. Selecting only `backlinksBy` keeps the
+  // subscription stable — we don't re-render on every link/tag
+  // mutation, just when an indexed file's backlinks change.
+  const backlinksBy = useLinkIndexStore((s) => s.backlinksBy);
+  const hydrated = useLinkIndexStore((s) => s.hydrated);
+  const derivedBacklinks = React.useMemo(() => {
+    if (!fileId) return 0;
+    return selectBacklinks(
+      // The selector only reads `backlinksBy` + `hydrated`; the
+      // empty rest of the state shape is fine.
+      {
+        files: new Set(),
+        links: [],
+        tags: [],
+        backlinksBy,
+        tagsBy: new Map(),
+        hydrated,
+      } as never,
+      fileId,
+    ).length;
+  }, [fileId, backlinksBy, hydrated]);
+
+  // Dirty count = number of files with unsaved edits across the
+  // whole session. Surfaced over the sync icon as the badge.
+  const dirtyFiles = useEditorStore((s) => s.dirtyFiles);
+  const derivedDirty = dirtyFiles.size;
+
+  // Vim mode badge is opt-in. We hide it entirely when the user
+  // hasn't enabled vim mode — saves screen real-estate on the pill
+  // and avoids a confusing "NOR" label for users who don't know
+  // what a modal editor is.
+  const vimEnabled = useSettingsStore((s) => s.vimMode);
+
+  // Caller-supplied overrides win — useful for tests / Storybook.
+  const effectiveEmpty = emptyOverride ?? fileId === null;
+  const effectiveBacklinks = backlinkCount ?? derivedBacklinks;
+  const effectiveWords = wordCount ?? derivedWords;
+  const effectiveChars = charCount ?? derivedChars;
+  const effectiveDirty = dirtyCount ?? derivedDirty;
+
   React.useEffect(() => {
+    if (!vimEnabled) return;
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as string | undefined;
       if (detail === "insert" || detail === "visual" || detail === "replace" || detail === "normal") {
@@ -89,29 +199,31 @@ export function StatusPill({
     };
     window.addEventListener("lattice-vim-mode", handler);
     return () => window.removeEventListener("lattice-vim-mode", handler);
-  }, []);
+  }, [vimEnabled]);
 
   return (
     <div
       className={cn(
         "absolute bottom-0 right-0 z-[80] inline-flex items-center whitespace-nowrap",
+        // Rounded top-left corner is the "gooey" bevel that lets the
+        // pill grow leftward from the corner without a hard 90° edge.
         "rounded-tl-[8px] border-t border-l",
         bgHeader,
         borderSoft,
         textMuted,
         "text-[11px] gap-1.5 pl-[10px] pr-1.5 h-[26px] pointer-events-auto",
-        empty && "pl-1 pr-1 gap-0 h-6",
+        effectiveEmpty && "pl-1 pr-1 gap-0 h-6",
       )}
     >
-      <VimBadge mode={vim} />
-      {!empty && (
+      {!effectiveEmpty && (
         <>
-          <Stat label="backlinks" value={backlinkCount ?? 0} />
-          <Stat label="words" value={wordCount ?? 0} />
-          <Stat label="chars" value={charCount ?? 0} />
+          <Stat label="backlinks" value={effectiveBacklinks} />
+          <Stat label="words" value={effectiveWords} />
+          <Stat label="chars" value={effectiveChars} />
+          {vimEnabled && <VimBadge mode={vim} />}
         </>
       )}
-      <SyncIndicator state={syncState} dirtyCount={dirtyCount} onClick={onSyncClick} />
+      <SyncIndicator state={syncState} dirtyCount={effectiveDirty} onClick={onSyncClick} />
     </div>
   );
 }

@@ -2,16 +2,20 @@
  * Calendar panel for the left sidebar.
  *
  * Obsidian-style daily-notes flow: click a date → open
- * `YYYY-MM-DD.md`. If the note doesn't exist yet, create it on the
- * fly with a heading + ISO date frontmatter. Dates with existing
- * notes get an indicator dot under the day number so the user can
- * see at a glance which days they've already journaled.
+ * `journals/YYYY-MM-DD.md`. If the note doesn't exist yet, create
+ * it on the fly with a heading + ISO date frontmatter under the
+ * `journals/` folder (the folder is created on first use). Dates
+ * with existing notes get an indicator dot under the day number so
+ * the user can see at a glance which days they've already
+ * journaled.
  *
  * The detection is filename-based: any `*.md` whose basename
  * (without extension) parses as `YYYY-MM-DD` counts. Folder
- * doesn't matter — vault-root, `Daily/`, `Journal/2026/06/…` all
- * resolve. Conflict handling: if two notes exist for the same
- * date, clicking opens the first one alphabetically.
+ * doesn't matter for the dot — vault-root, `journals/`,
+ * `Daily/2026/06/…` all resolve. New notes go to `journals/`
+ * specifically; existing matches anywhere keep their location.
+ * Conflict handling: if two notes exist for the same date,
+ * clicking opens the first one alphabetically.
  *
  * No new IPC needed — uses the existing vault tree + file
  * operations the rest of the app already has.
@@ -95,10 +99,12 @@ export function CalendarPanel() {
         );
         return;
       }
-      // New daily note — create at vault root for now (`<iso>.md`).
-      // A "daily-notes folder" setting can override this once the
-      // settings panel ships.
-      const path = `${iso}.md`;
+      // New daily note — anchor under `journals/` so daily entries
+      // stay grouped in one place and don't pollute the vault root.
+      // The Rust `create_file` command creates intermediate dirs
+      // atomically, so we don't need an explicit `create_directory`
+      // call first.
+      const path = `journals/${iso}.md`;
       const longDate = date.toLocaleDateString(undefined, {
         weekday: "long",
         month: "long",

@@ -25,9 +25,14 @@ import {
 } from "@codemirror/autocomplete";
 import { EditorView } from "@codemirror/view";
 
+import type { CompletionIconKind } from "./completion-icon";
+
 interface SlashItem {
   label: string;
   detail?: string;
+  /** Categorical icon for the autocomplete row. Renders as a lucide
+   *  SVG via the editor's `addToOptions` hook. */
+  iconKind: CompletionIconKind;
   /** Body inserted at the cursor. Use `$|` to mark the post-insert
    *  cursor position. `$\n` puts the cursor at the end of the body
    *  (default). */
@@ -38,32 +43,35 @@ interface SlashItem {
 }
 
 const ITEMS: SlashItem[] = [
-  { label: "Heading 1", detail: "# ", body: "# $|" },
-  { label: "Heading 2", detail: "## ", body: "## $|" },
-  { label: "Heading 3", detail: "### ", body: "### $|" },
-  { label: "Bullet list", detail: "- ", body: "- $|" },
-  { label: "Numbered list", detail: "1. ", body: "1. $|" },
-  { label: "Task", detail: "- [ ] ", body: "- [ ] $|" },
-  { label: "Quote", detail: "> ", body: "> $|" },
-  { label: "Code block", detail: "``` … ```", body: "```$|\n\n```" },
-  { label: "Inline code", detail: "`code`", body: "`$|`" },
-  { label: "Divider", detail: "---", body: "---\n$|" },
+  { label: "Heading 1", detail: "# ",         iconKind: "heading-1",     body: "# $|" },
+  { label: "Heading 2", detail: "## ",        iconKind: "heading-2",     body: "## $|" },
+  { label: "Heading 3", detail: "### ",       iconKind: "heading-3",     body: "### $|" },
+  { label: "Bullet list", detail: "- ",       iconKind: "bullet-list",   body: "- $|" },
+  { label: "Numbered list", detail: "1. ",    iconKind: "numbered-list", body: "1. $|" },
+  { label: "Task", detail: "- [ ] ",          iconKind: "task",          body: "- [ ] $|" },
+  { label: "Quote", detail: "> ",             iconKind: "quote",         body: "> $|" },
+  { label: "Code block", detail: "``` … ```", iconKind: "code",          body: "```$|\n\n```" },
+  { label: "Inline code", detail: "`code`",   iconKind: "inline-code",   body: "`$|`" },
+  { label: "Divider", detail: "---",          iconKind: "divider",       body: "---\n$|" },
   {
     label: "Table",
     detail: "| col | col |",
+    iconKind: "table",
     body: "| $| |  |\n| --- | --- |\n|  |  |",
   },
-  { label: "Callout", detail: "> [!note]", body: "> [!note]\n> $|" },
-  { label: "Math (block)", detail: "$$ … $$", body: "$$\n$|\n$$" },
-  { label: "Wikilink", detail: "[[…]]", body: "[[$|]]" },
+  { label: "Callout", detail: "> [!note]",    iconKind: "callout",       body: "> [!note]\n> $|" },
+  { label: "Math (block)", detail: "$$ … $$", iconKind: "math",          body: "$$\n$|\n$$" },
+  { label: "Wikilink", detail: "[[…]]",       iconKind: "wikilink",      body: "[[$|]]" },
   {
     label: "Embed image",
     detail: "![[…]]",
+    iconKind: "embed",
     body: "![[$|]]",
   },
   {
     label: "Link to work item",
     detail: "kanban",
+    iconKind: "work-item",
     apply: (view, from, to) => {
       // Remove the `/query` token first, then dispatch the kanban
       // picker. The picker's `onPicked` handler inserts the link at
@@ -78,6 +86,7 @@ const ITEMS: SlashItem[] = [
   {
     label: "New kanban board",
     detail: "kanban",
+    iconKind: "kanban",
     apply: (view, from, to) => {
       view.dispatch({
         changes: { from, to, insert: "" },
@@ -128,6 +137,10 @@ export function slashCompletions(
     displayLabel: item.label,
     detail: item.detail,
     type: "keyword",
+    // Smuggle the icon kind through to `addToOptions.render` via a
+    // bag attached to the Completion. CM6 ignores unknown keys;
+    // our renderer reads it back as `completion.iconKind`.
+    iconKind: item.iconKind,
     apply: (view, _completion, _from, _to) => {
       if (item.apply) {
         item.apply(view, tokenStart, tokenEnd);
@@ -135,7 +148,7 @@ export function slashCompletions(
       }
       applySnippet(view, tokenStart, tokenEnd, item.body ?? "");
     },
-  }));
+  } as Completion & { iconKind: CompletionIconKind }));
 
   return {
     from: tokenStart,

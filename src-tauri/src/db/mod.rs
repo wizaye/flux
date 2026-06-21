@@ -57,6 +57,10 @@ fn run_migrations(conn: &mut Connection) -> Result<()> {
     let migrations = Migrations::new(vec![
         M::up(include_str!("../../migrations/001_init.sql")),
         M::up(include_str!("../../migrations/002_fts.sql")),
+        // 003 is a one-time repair for vaults written by builds that
+        // pre-date `canonicalise_rel()` — rewrites every backslash
+        // path to forward-slash and drops duplicate UNIQUE keys.
+        M::up(include_str!("../../migrations/003_canonicalise_paths.sql")),
         // Future migrations go here
     ]);
 

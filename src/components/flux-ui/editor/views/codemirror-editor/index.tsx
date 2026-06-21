@@ -52,6 +52,10 @@ import { vimMode as makeVimExtension } from "../../extensions/cm-vim";
 import { livePreviewExtension, livePreviewStyles } from "../../extensions/live-preview";
 import { taskActionExtension } from "../../extensions/task-action";
 import { slashCompletions } from "../../extensions/slash-menu";
+import {
+  iconNodeFor,
+  type CompletionIconKind,
+} from "../../extensions/completion-icon";
 import { markdownShortcuts } from "../../extensions/markdown-shortcuts";
 import { EMPTY_PANE_ACTIONS } from "../types";
 import { PaneDocHeader } from "../../pane-doc-header";
@@ -130,20 +134,96 @@ const editorThemeBase = {
     color: "var(--text-faint)",
   },
   ".cm-tooltip": {
-    border: "1px solid var(--border-strong)",
-    backgroundColor: "var(--bg-header)",
-    color: "var(--text-normal)",
-    borderRadius: "6px",
-    boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
+    // Match shadcn Popover: rounded-md card, hairline border, soft
+    // elevation. Uses theme tokens (--popover / --border) so dark/
+    // light parity is automatic.
+    border: "1px solid var(--border)",
+    backgroundColor: "var(--popover, var(--bg-header))",
+    color: "var(--popover-foreground, var(--text-normal))",
+    borderRadius: "10px",
+    boxShadow:
+      "0 1px 3px 0 rgb(0 0 0 / 0.1), 0 8px 24px -4px rgb(0 0 0 / 0.2)",
+    padding: "4px",
   },
   ".cm-tooltip-autocomplete": {
+    fontFamily: "var(--font-sans)",
+    fontSize: "12.5px",
+    minWidth: "260px",
+    maxWidth: "380px",
+    "& > ul": {
+      maxHeight: "320px",
+      // Custom scrollbar styling lives in App.css (matches the
+      // sidebar) — nothing extra to do here.
+    },
     "& > ul > li": {
-      color: "var(--text-normal)",
-      padding: "4px 8px",
+      display: "flex",
+      alignItems: "center",
+      gap: "8px",
+      padding: "6px 10px",
+      borderRadius: "6px",
+      color: "var(--popover-foreground, var(--text-normal))",
+      lineHeight: "1.3",
+      cursor: "default",
+      // Soft separator between rows — almost invisible, but enough
+      // to break up a tall list of `[[…]]` candidates.
+      borderTop: "1px solid transparent",
+    },
+    "& > ul > li:hover": {
+      backgroundColor: "var(--muted, rgba(127,127,127,0.10))",
     },
     "& > ul > li[aria-selected]": {
-      backgroundColor: "var(--accent)",
-      color: "var(--accent-foreground)",
+      // shadcn Command convention: selected row uses `--accent` /
+      // `--accent-foreground` (subtle background, regular text
+      // color) — readable and theme-aware.
+      backgroundColor: "var(--accent, rgba(127,127,127,0.18))",
+      color: "var(--accent-foreground, var(--text-normal))",
+    },
+    "& .cm-completionLabel": {
+      flex: "1 1 auto",
+      minWidth: 0,
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+    },
+    // Match-character highlight inside the label (CM6 underlines
+    // each typed character). We swap that for a soft accent bg so
+    // the typed prefix pops without the underline looking like a
+    // misclick.
+    "& .cm-completionMatchedText": {
+      textDecoration: "none",
+      color: "var(--ring, var(--accent))",
+      fontWeight: "600",
+    },
+    "& .cm-completionDetail": {
+      flex: "0 0 auto",
+      marginLeft: "auto",
+      paddingLeft: "10px",
+      color: "var(--muted-foreground, var(--text-faint))",
+      fontStyle: "normal",
+      fontSize: "11px",
+      // kbd-style chip — same vibe as <Kbd /> in the rest of the
+      // app.
+      fontFamily: "var(--font-mono)",
+      letterSpacing: "0.01em",
+    },
+    "& .cm-completionIcon": {
+      // We replace the CM6 default icon column entirely via
+      // `addToOptions.render` (see iconNodeFor). Hiding the built-in
+      // glyph keeps the row tidy when our renderer runs and prevents
+      // double-icons.
+      display: "none",
+    },
+    "& .cm-flux-icon": {
+      flex: "0 0 auto",
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: "16px",
+      height: "16px",
+      color: "var(--muted-foreground, var(--text-muted))",
+    },
+    "& > ul > li[aria-selected] .cm-flux-icon": {
+      color: "var(--accent-foreground, var(--text-normal))",
     },
   },
 };
@@ -342,17 +422,58 @@ const listHangingIndent = ViewPlugin.fromClass(
 );
 
 // ── Wikilink autocomplete (uses optional `vault` prop) ──
-function collectMarkdownFiles(
+
+/** Extensions that participate in wikilink completions.
+ *  Anything else (json, log, db, lock, …) is internal metadata
+ *  that should never surface as a `[[…]]` target. Kept narrow on
+ *  purpose: add a value here only when we have a real "open this
+ *  in a viewer" pipeline for it. */
+export const WIKILINK_EXTENSIONS = new Set([
+  "md",
+  "markdown",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "svg",
+  "pdf",
+]);
+
+/** Reject any path that lives under a dotfolder (`.zenvault/`,
+ *  `.git/`, `.archive/`, `.trash/`, etc.). These are vault metadata
+ *  that the user should never wikilink to. Matches both `/` and `\`
+ *  separators so Windows paths route through the same predicate. */
+export function isInternalPath(id: string): boolean {
+  return id
+    .split(/[\\/]/)
+    .some((seg, idx) => seg.startsWith(".") && (idx > 0 || seg.length > 1));
+}
+
+export function collectMarkdownFiles(
   vault: Map<string, FileNode>,
 ): { name: string; id: string }[] {
   const out: { name: string; id: string }[] = [];
   for (const node of vault.values()) {
     if (node.kind === "folder") continue;
-    if (node.name.toLowerCase().endsWith(".md")) {
+    // Drop anything inside `.zenvault/`, `.git/`, `.archive/`,
+    // `.trash/`, etc. — those folders carry plugin state, indexed
+    // caches, deleted history, all of which would only confuse the
+    // user if they showed up as wikilink targets.
+    if (isInternalPath(node.id)) continue;
+    const lower = node.name.toLowerCase();
+    const ext = lower.includes(".") ? lower.split(".").pop() ?? "" : "";
+    if (ext === "md") {
+      // Markdown wikilinks display without the `.md` suffix —
+      // matches Obsidian / lattice convention.
       out.push({ name: node.name.replace(/\.md$/i, ""), id: node.id });
-    } else if (node.kind !== "canvas") {
+    } else if (WIKILINK_EXTENSIONS.has(ext)) {
+      // Media + PDFs + `.markdown` keep their extension so the
+      // link target is unambiguous when multiple files share a stem.
       out.push({ name: node.name, id: node.id });
     }
+    // `kind: "canvas"` is opened by a plugin, not wikilinked. JSON,
+    // YAML, lockfiles, sqlite, etc. fall through and are skipped.
   }
   return out;
 }
@@ -381,6 +502,15 @@ function makeWikilinkCompletions(vault: Map<string, FileNode> | undefined) {
       .filter((f) => query === "" || f.name.toLowerCase().includes(query))
       .map((f) => ({
         label: f.name,
+        // `type` is the CM6 standard hint (used by other consumers);
+        // `iconKind` is our richer category that the
+        // `addToOptions.render` hook turns into a real lucide SVG.
+        type: completionTypeFor(f.id),
+        iconKind: iconKindFor(f.id),
+        // Right-aligned hint: relative folder so users can disambiguate
+        // when several notes share a name. We trim the leading slash
+        // and the filename so only the parent path remains.
+        detail: folderHint(f.id),
         apply: (view: EditorView) => {
           const insert = `[[${f.name}]]`;
           view.dispatch({
@@ -392,6 +522,47 @@ function makeWikilinkCompletions(vault: Map<string, FileNode> | undefined) {
       }));
     return { from: match.from, options, filter: false };
   };
+}
+
+/** Classify a vault file for the autocomplete icon column. */
+function completionTypeFor(id: string): "note" | "image" | "pdf" | "media" {
+  const ext = id.toLowerCase().split(".").pop() ?? "";
+  if (ext === "md" || ext === "markdown") return "note";
+  if (ext === "pdf") return "pdf";
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return "image";
+  return "media";
+}
+
+/** Map a vault file to the icon-kind taxonomy our SVG renderer
+ *  understands. Same buckets as `completionTypeFor` plus future
+ *  expansion room (csv, audio, ...). */
+function iconKindFor(id: string): CompletionIconKind {
+  const t = completionTypeFor(id);
+  return t;
+}
+
+/** Fallback: turn CM's `type` string (used by third-party
+ *  completion sources that don't set `iconKind`) into our richer
+ *  icon-kind. Anything unknown falls through to `note`. */
+function typeToIconKind(type: string | undefined): CompletionIconKind {
+  switch (type) {
+    case "note":
+    case "image":
+    case "pdf":
+    case "media":
+    case "keyword":
+      return type === "keyword" ? "wikilink" : type;
+    default:
+      return "note";
+  }
+}
+
+/** Folder portion of a vault path, with leading slash trimmed.
+ *  Returns `""` for vault-root files (no folder hint to show). */
+function folderHint(id: string): string {
+  const norm = id.replace(/\\/g, "/").replace(/^\/+/, "");
+  const slash = norm.lastIndexOf("/");
+  return slash > 0 ? norm.slice(0, slash) : "";
 }
 
 // ── List-aware Tab / Shift-Tab ──
@@ -529,6 +700,14 @@ function CodeMirrorEditorBody({
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const loadedFileRef = useRef<string | null>(null);
+  // Per-file last-known selection. Used to restore the cursor when
+  // the EditorView is recreated for the SAME file (vim toggle,
+  // theme flip, settings change) so users don't see the cursor
+  // snap back to position 0 — which auto-scrolls the viewport to
+  // the top of the document and feels like a teleport.
+  const lastSelectionRef = useRef<Map<string, { anchor: number; head: number }>>(
+    new Map(),
+  );
 
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
@@ -568,7 +747,15 @@ function CodeMirrorEditorBody({
     if (!editorRef.current || !filePath) return;
     if (loadedFileRef.current === filePath && viewRef.current) return;
 
-    if (viewRef.current) {
+    // Capture the live selection from the outgoing view BEFORE we
+    // destroy it — keyed by file path so a tab swap doesn't try to
+    // restore another file's cursor.
+    if (viewRef.current && loadedFileRef.current) {
+      const sel = viewRef.current.state.selection.main;
+      lastSelectionRef.current.set(loadedFileRef.current, {
+        anchor: sel.anchor,
+        head: sel.head,
+      });
       viewRef.current.destroy();
       viewRef.current = null;
     }
@@ -645,6 +832,23 @@ function CodeMirrorEditorBody({
         autocompletion({
           override: [wikilinkCompletions, slashCompletions],
           activateOnTyping: true,
+          // Inject a lucide SVG icon in the leading slot of every
+          // row. Reads the `iconKind` field we smuggle through on
+          // each Completion; falls back to the CM type → icon map.
+          // Position `15` puts it BEFORE the default icon column
+          // (position 20), which the editor theme hides via
+          // `.cm-completionIcon { display: none }`.
+          addToOptions: [
+            {
+              position: 15,
+              render: (completion) => {
+                const kind =
+                  (completion as { iconKind?: CompletionIconKind }).iconKind ??
+                  typeToIconKind(completion.type);
+                return iconNodeFor(kind);
+              },
+            },
+          ],
         }),
         // Markdown shortcut input rules — triple-backtick fence
         // auto-close, triple-dollar math block. Registered AFTER
@@ -739,6 +943,20 @@ function CodeMirrorEditorBody({
     });
 
     const view = new EditorView({ state, parent: editorRef.current });
+    // Restore the per-file selection if we have one cached. Clamp
+    // to the current doc length so a shrunk file doesn't throw
+    // "selection points outside doc" \u2014 then scroll the restored
+    // cursor into view so the viewport doesn't anchor on line 1.
+    const cached = lastSelectionRef.current.get(currentPath);
+    if (cached) {
+      const docLen = view.state.doc.length;
+      const anchor = Math.min(cached.anchor, docLen);
+      const head = Math.min(cached.head, docLen);
+      view.dispatch({
+        selection: { anchor, head },
+        scrollIntoView: true,
+      });
+    }
     // Tag the editor DOM with the bound file path so DOM-level
     // event handlers (e.g. the task-action extension's "link work
     // item" button) can identify the source file without importing
@@ -748,6 +966,17 @@ function CodeMirrorEditorBody({
 
     return () => {
       clearTimeout(debounceTimer);
+      // Snapshot selection one last time before tearing the view
+      // down \u2014 covers the dependency-driven re-run path (vim toggle,
+      // theme flip, ...). The capture at the top of the effect
+      // handles file-change swaps where the path is mid-flight.
+      if (view) {
+        const sel = view.state.selection.main;
+        lastSelectionRef.current.set(currentPath, {
+          anchor: sel.anchor,
+          head: sel.head,
+        });
+      }
       view.destroy();
       viewRef.current = null;
       loadedFileRef.current = null;

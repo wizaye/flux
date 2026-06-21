@@ -147,6 +147,31 @@ pub struct TrashEntry {
     pub trashed_at: i64,
 }
 
+/// One entry in the archive (`.archive/...`). Archive is a soft-
+/// retire bucket separate from trash — files put there are not
+/// scheduled for janitor purge. Unlike `.trash/YYYY-MM/...`, the
+/// archive preserves the original directory structure verbatim:
+/// `.archive/notes/old/foo.md` came from `notes/old/foo.md`.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveEntry {
+    /// Where the file lives now, relative to the vault root
+    /// (always begins with `.archive/`).
+    pub archive_path: String,
+    /// Where it lived before archiving, relative to the vault root.
+    pub original_path: String,
+    /// Display name (last path component).
+    pub name: String,
+    /// File size in bytes (0 for directories).
+    pub size: u64,
+    /// True when this entry is a directory — archived folders are
+    /// kept as folders (we never tar them up).
+    pub is_dir: bool,
+    /// When the file was archived (Unix epoch ms — derived from the
+    /// file's modified time after the rename).
+    pub archived_at: i64,
+}
+
 /// Single result row returned by `search_files`. The snippet is
 /// pre-highlighted HTML with `<mark>` tags wrapping the match — the
 /// frontend renders it verbatim inside the result card.
