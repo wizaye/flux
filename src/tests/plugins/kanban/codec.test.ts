@@ -7,13 +7,13 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { parseBoard, serialiseBoard } from "../../../plugins/kanban/src/codec";
+import { parseBoard, serialiseBoard } from "../../../../plugins/kanban/src/codec";
 import {
   BOARD_TEMPLATES,
   FALLBACK_ITEM_TYPE_ID,
   emptyBoard,
   type KanbanBoard,
-} from "../../../plugins/kanban/src/schema";
+} from "../../../../plugins/kanban/src/schema";
 
 describe("parseBoard", () => {
   it("returns an empty board for blank / whitespace input", () => {

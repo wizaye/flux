@@ -100,3 +100,33 @@ pub fn canonicalise_rel(path: &str) -> String {
     let trimmed = out.trim_start_matches('/').trim_end_matches('/');
     trimmed.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[test]
+    fn test_get_vault_path_when_closed() {
+        let state = AppState::default();
+        let err = get_vault_path(&state).unwrap_err();
+        assert!(matches!(err, AppError::NoVaultOpen));
+    }
+
+    #[test]
+    fn test_get_vault_path_when_open() {
+        let state = AppState {
+            vault_path: Mutex::new(Some("/my/test/vault".to_string())),
+            ..Default::default()
+        };
+        let path = get_vault_path(&state).unwrap();
+        assert_eq!(path, PathBuf::from("/my/test/vault"));
+    }
+
+    #[test]
+    fn test_get_db_pool_when_closed() {
+        let state = AppState::default();
+        let err = get_db_pool(&state).unwrap_err();
+        assert!(matches!(err, AppError::NoVaultOpen));
+    }
+}

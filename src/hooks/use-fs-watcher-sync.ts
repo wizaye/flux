@@ -11,6 +11,8 @@
 import { useEffect, useRef } from "react";
 import { useVaultOperations } from "@/hooks/use-vault-operations";
 import { isTauri } from "@/bindings";
+import { useVaultStore } from "@/state/vault-store";
+import { flattenVault } from "@/state/editor";
 
 interface FsChangedPayload {
   changed: string[];
@@ -30,7 +32,18 @@ export function useFsWatcherSync() {
       const { listen } = await import("@tauri-apps/api/event");
       const off = await listen<FsChangedPayload>(
         "flux://fs-changed",
-        () => {
+        (event) => {
+          const { fileTree } = useVaultStore.getState();
+          const currentPaths = flattenVault(fileTree);
+
+          const hasRemoved = event.payload.removed.some((p) => currentPaths.has(p));
+          const hasNew = event.payload.changed.some((p) => !currentPaths.has(p));
+
+          if (!hasRemoved && !hasNew) {
+            // Content modification of existing files only - skip full vault tree rebuild
+            return;
+          }
+
           // Debounce: collapse rapid bursts into a single refresh.
           if (timer.current !== null) {
             window.clearTimeout(timer.current);

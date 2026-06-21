@@ -149,6 +149,9 @@ fn is_ignored(rel: &str) -> bool {
     if rel.is_empty() {
         return true;
     }
+    if rel.ends_with(".tmp") {
+        return true;
+    }
     for part in rel.split('/') {
         if part == ".zenvault" || part == ".git" || part == "node_modules" || part == ".trash" {
             return true;

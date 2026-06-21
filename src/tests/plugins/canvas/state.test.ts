@@ -13,7 +13,7 @@ import {
   strokeToPath,
   type CanvasDoc,
   type CanvasTextNode,
-} from "../../../plugins/canvas/src/state";
+} from "../../../../plugins/canvas/src/state";
 
 describe("emptyCanvasDoc", () => {
   it("returns a doc with empty arrays", () => {

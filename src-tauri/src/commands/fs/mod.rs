@@ -130,23 +130,28 @@ pub async fn write_file(
 
     // Ensure parent directory exists
     if let Some(parent) = file_path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            AppError::Io(format!("Failed to create parent dir {:?}: {}", parent, e))
+        })?;
     }
-
-    // Atomic write: temp file in same directory → fsync → rename
-    let temp_path = file_path.with_extension("tmp");
 
     {
-        let mut temp_file = std::fs::File::create(&temp_path)?;
-        temp_file.write_all(content.as_bytes())?;
-        temp_file.sync_all()?;
+        let mut file = std::fs::File::create(&file_path).map_err(|e| {
+            AppError::Io(format!("Failed to create file {:?}: {}", file_path, e))
+        })?;
+        file.write_all(content.as_bytes()).map_err(|e| {
+            AppError::Io(format!("Failed to write file content {:?}: {}", file_path, e))
+        })?;
+        file.sync_all().map_err(|e| {
+            AppError::Io(format!("Failed to sync file {:?}: {}", file_path, e))
+        })?;
     }
-
-    std::fs::rename(&temp_path, &file_path)?;
 
     // Update database index
     let pool = get_db_pool_from_state(&state)?;
-    let file_metadata = tokio::fs::metadata(&file_path).await?;
+    let file_metadata = tokio::fs::metadata(&file_path).await.map_err(|e| {
+        AppError::Io(format!("Failed to read metadata for resolved path {:?}: {}", file_path, e))
+    })?;
     let modified_at = file_metadata
         .modified()?
         .duration_since(std::time::UNIX_EPOCH)

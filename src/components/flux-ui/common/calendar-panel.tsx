@@ -111,7 +111,7 @@ export function CalendarPanel() {
         day: "numeric",
         year: "numeric",
       });
-      const initial = `---\ndate: ${iso}\n---\n\n# ${iso}\n\nNotes for ${longDate}.\n`;
+      const initial = `# ${iso}\n\nNotes for ${longDate}.\n`;
       try {
         await createFile(path, initial);
         // The file-tree mutator already inserted the node — open it.
@@ -134,6 +134,7 @@ export function CalendarPanel() {
       <div className="overflow-x-auto -mx-1 px-1">
         <Calendar
           mode="single"
+          captionLayout="dropdown"
           selected={selected}
           onSelect={(d) => {
             if (!d) return;
@@ -145,7 +146,7 @@ export function CalendarPanel() {
             hasNote:
               "relative after:absolute after:bottom-1 after:left-1/2 after:-translate-x-1/2 after:size-1 after:rounded-full after:bg-primary",
           }}
-          className="mx-auto [--cell-size:--spacing(6.5)] p-1"
+          className="mx-auto [--cell-size:--spacing(6.5)] p-1 bg-transparent border-0"
         />
       </div>
 

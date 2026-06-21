@@ -11,7 +11,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:ui": "vitest --ui"
+    "test:ui": "vitest --ui",
+    "test:backend": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:coverage:backend": "LLVM_COV=/Library/Developer/CommandLineTools/usr/bin/llvm-cov LLVM_PROFDATA=/Library/Developer/CommandLineTools/usr/bin/llvm-profdata cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html --output-dir coverage/backend",
+    "test:all": "pnpm test && pnpm test:backend",
+    "test:coverage:all": "pnpm test:coverage && pnpm test:coverage:backend"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

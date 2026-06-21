@@ -9,6 +9,13 @@ import {
 import { cn } from "@/lib/utils"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon } from "lucide-react"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 
 function Calendar({
   className,
@@ -49,17 +56,17 @@ function Calendar({
         ),
         month: cn("flex w-full flex-col gap-4", defaultClassNames.month),
         nav: cn(
-          "absolute inset-x-0 top-0 flex w-full items-center justify-between gap-1",
+          "absolute inset-x-0 top-0 flex w-full items-center justify-between gap-1 pointer-events-none",
           defaultClassNames.nav
         ),
         button_previous: cn(
           buttonVariants({ variant: buttonVariant }),
-          "size-(--cell-size) p-0 select-none aria-disabled:opacity-50",
+          "size-(--cell-size) p-0 select-none aria-disabled:opacity-50 pointer-events-auto",
           defaultClassNames.button_previous
         ),
         button_next: cn(
           buttonVariants({ variant: buttonVariant }),
-          "size-(--cell-size) p-0 select-none aria-disabled:opacity-50",
+          "size-(--cell-size) p-0 select-none aria-disabled:opacity-50 pointer-events-auto",
           defaultClassNames.button_next
         ),
         month_caption: cn(
@@ -158,6 +165,42 @@ function Calendar({
           return (
             <ChevronDownIcon className={cn("size-4", className)} {...props} />
           )
+        },
+        Dropdown: ({ value, onChange, options, "aria-label": ariaLabel }) => {
+          const selectedOption = options?.find((option) => option.value === value);
+          const handleValueChange = (newValue: string) => {
+            if (onChange) {
+              const event = {
+                target: { value: newValue },
+              } as React.ChangeEvent<HTMLSelectElement>;
+              onChange(event);
+            }
+          };
+          return (
+            <Select
+              value={value?.toString()}
+              onValueChange={handleValueChange}
+            >
+              <SelectTrigger 
+                aria-label={ariaLabel}
+                size="sm"
+                className="gap-1 px-1.5 h-7 text-xs font-medium focus:ring-0 focus-visible:ring-0 [&_svg]:size-3 bg-transparent border-transparent hover:bg-muted/50 data-placeholder:text-muted-foreground select-none"
+              >
+                <SelectValue>{selectedOption?.label}</SelectValue>
+              </SelectTrigger>
+              <SelectContent className="max-h-60 overflow-y-auto">
+                {options?.map((option) => (
+                  <SelectItem
+                    key={option.value}
+                    value={option.value.toString()}
+                    className="text-xs"
+                  >
+                    {option.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          );
         },
         DayButton: ({ ...props }) => (
           <CalendarDayButton locale={locale} {...props} />

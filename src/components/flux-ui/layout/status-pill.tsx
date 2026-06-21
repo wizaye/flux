@@ -25,6 +25,7 @@ import { useTabSyncStore } from "@/state/tab-sync-store";
 import { useVaultStore } from "@/state/vault-store";
 import { useEditorStore } from "@/state/editor-store";
 import { useSettingsStore } from "@/state/settings-store";
+import { usePluginStore } from "@/state/plugin-store";
 import {
   useLinkIndexStore,
   selectBacklinks,
@@ -142,9 +143,24 @@ export function StatusPill({
   const activeFile = useTabSyncStore((s) => s.activeFile);
   const fileId = activeFile?.fileId ?? null;
 
+  // Detect if the active file is a standard markdown document.
+  // Canvas files, PDFs, virtual graph views, and plugin-owned files (like kanban board)
+  // are treated as non-markdown and the status pill will be compacted.
+  const pluginRegistry = usePluginStore((s) => s.editorViewRegistry);
+  const isMarkdown = React.useMemo(() => {
+    if (!fileId) return false;
+    const lower = fileId.toLowerCase();
+    const isMd = lower.endsWith(".md") || lower.endsWith(".markdown");
+    const matchesPlugin = Object.keys(pluginRegistry).some((ext) =>
+      lower.endsWith(ext.toLowerCase())
+    );
+    return isMd && !matchesPlugin;
+  }, [fileId, pluginRegistry]);
+
   // Word + character count come from whatever doc the editor /
   // vault store currently holds for the active file.
-  const body = useActiveFileBody(fileId);
+  // Only load body and count if it is a markdown file.
+  const body = useActiveFileBody(isMarkdown ? fileId : null);
   const derivedWords = React.useMemo(() => countWords(body), [body]);
   const derivedChars = body.length;
 
@@ -155,7 +171,7 @@ export function StatusPill({
   const backlinksBy = useLinkIndexStore((s) => s.backlinksBy);
   const hydrated = useLinkIndexStore((s) => s.hydrated);
   const derivedBacklinks = React.useMemo(() => {
-    if (!fileId) return 0;
+    if (!fileId || !isMarkdown) return 0;
     return selectBacklinks(
       // The selector only reads `backlinksBy` + `hydrated`; the
       // empty rest of the state shape is fine.
@@ -169,7 +185,7 @@ export function StatusPill({
       } as never,
       fileId,
     ).length;
-  }, [fileId, backlinksBy, hydrated]);
+  }, [fileId, isMarkdown, backlinksBy, hydrated]);
 
   // Dirty count = number of files with unsaved edits across the
   // whole session. Surfaced over the sync icon as the badge.
@@ -183,7 +199,7 @@ export function StatusPill({
   const vimEnabled = useSettingsStore((s) => s.vimMode);
 
   // Caller-supplied overrides win — useful for tests / Storybook.
-  const effectiveEmpty = emptyOverride ?? fileId === null;
+  const effectiveEmpty = emptyOverride ?? (fileId === null || !isMarkdown);
   const effectiveBacklinks = backlinkCount ?? derivedBacklinks;
   const effectiveWords = wordCount ?? derivedWords;
   const effectiveChars = charCount ?? derivedChars;

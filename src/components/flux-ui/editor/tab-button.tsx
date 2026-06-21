@@ -5,7 +5,6 @@ import {
   textMuted,
   textNormal,
   borderTab,
-  borderTabBg,
 } from "@/lib/lattice-tokens";
 import {
   IcClose,
@@ -308,12 +307,15 @@ export function TabButton(props: Props) {
         {showRightSeparator && !isActive && (
           <span
             aria-hidden
-            className={cn(
-              "pointer-events-none absolute right-0 w-px",
-              borderTabBg,
-            )}
-            style={{ top: 6, bottom: 6 }}
-          />
+            className="pointer-events-none absolute right-0 text-[#909090]/40 dark:text-[#6a6a6a]/40 text-[10px]"
+            style={{ 
+              top: '50%', 
+              transform: 'translateY(-50%)',
+              right: '-0.5px' 
+            }}
+          >
+            |
+          </span>
         )}
       </div>
       </ContextMenuTrigger>

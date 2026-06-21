@@ -6,9 +6,9 @@
  */
 
 // Sidebar widths (px)
-export const LEFT_MIN = 160;
+export const LEFT_MIN = 220;
 export const LEFT_DEFAULT = 240;
-export const RIGHT_MIN = 200;
+export const RIGHT_MIN = 220;
 export const RIGHT_DEFAULT = 280;
 
 // Activity strip width (px)

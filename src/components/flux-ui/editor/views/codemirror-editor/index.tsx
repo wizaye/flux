@@ -1001,6 +1001,11 @@ function CodeMirrorEditorBody({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        const target = e.target as HTMLElement;
+        if (target && target.closest(".cm-content")) {
+          // Let CodeMirror's internal Mod-s keymap handle it
+          return;
+        }
         e.preventDefault();
         onSaveRef.current();
       }

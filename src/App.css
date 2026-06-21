@@ -50,6 +50,7 @@
 }
 
 :root {
+    color-scheme: light;
     --background: oklch(1 0 0);
     --foreground: oklch(0.145 0 0);
     --card: oklch(1 0 0);
@@ -118,6 +119,7 @@
 }
 
 .dark {
+    color-scheme: dark;
     --background: oklch(0.145 0 0);
     --foreground: oklch(0.985 0 0);
     --card: oklch(0.205 0 0);
@@ -235,20 +237,23 @@
 }
 ::-webkit-scrollbar-corner { background: transparent; }
 
-.dark ::-webkit-scrollbar-thumb {
+.dark ::-webkit-scrollbar-thumb,
+.dark::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.10);
   background-clip: padding-box;
 }
-.dark ::-webkit-scrollbar-thumb:hover {
+.dark ::-webkit-scrollbar-thumb:hover,
+.dark::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.18);
   background-clip: padding-box;
 }
 
 /* Firefox + modern Chromium fallback (no -webkit- prefix). */
-* {
+*, html {
   scrollbar-width: thin;
   scrollbar-color: rgba(0, 0, 0, 0.22) transparent;
 }
-.dark * {
+.dark *,
+.dark {
   scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
 }

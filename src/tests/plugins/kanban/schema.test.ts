@@ -13,7 +13,7 @@ import {
   shortId,
   workItemLink,
   type WorkItem,
-} from "../../../plugins/kanban/src/schema";
+} from "../../../../plugins/kanban/src/schema";
 
 function makeItem(overrides: Partial<WorkItem> = {}): WorkItem {
   return {
