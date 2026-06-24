@@ -26,19 +26,45 @@ identity across plugins.
 | `@flux/plugin-sdk/host` | `createPluginHost`, `HostCallError` | call privileged host APIs from a plugin |
 | `@flux/plugin-sdk/layout` | `PluginPaneLayout` | matches the host pane chrome (header + body + footer) |
 | `@flux/plugin-sdk/drag` | drag-MIME constants for receiving DnD from the host | wire your editor view into the host's drag pipeline |
-| `@flux/plugin-sdk/ui` | re-exports of host shadcn primitives (`Button`, `Dialog`, …) | use the same UI vocabulary as the rest of the app |
 
 ## Host-internal, NOT in the published package
 
 | Subpath | Why it isn't public |
 |---|---|
 | `@flux/plugin-sdk/bridge` | re-exports first-party host stores/hooks behind `@/state/*` aliases — only resolves inside the Flux monorepo. Community plugins use `@flux/plugin-sdk/host` instead. |
+| `@flux/plugin-sdk/ui` | re-exports the host's shadcn copies behind `@/components/ui/*` aliases. Per the shadcn philosophy (primitives are source code, not a library) community plugins copy their own shadcn primitives into the plugin's source tree. See **"UI primitives for community plugins"** below. |
 
 Both still resolve in-repo for first-party plugins (Canvas,
 Kanban) because the Vite + tsconfig alias maps short-circuit
 package resolution. They are deliberately omitted from
 `publishConfig.exports` so an npm-installed copy cannot import
 them.
+
+## UI primitives for community plugins
+
+Community plugins should bundle their own shadcn primitives —
+that matches the canonical shadcn workflow and avoids coupling
+the plugin to a specific Flux SDK version's UI surface.
+
+Quick setup inside your plugin repo:
+
+```sh
+# 1. Install Radix + the Tailwind helpers shadcn primitives need.
+pnpm add @radix-ui/react-dialog @radix-ui/react-checkbox \
+         @radix-ui/react-dropdown-menu @radix-ui/react-select \
+         @radix-ui/react-switch @radix-ui/react-tooltip \
+         class-variance-authority clsx tailwind-merge
+
+# 2. shadcn init + add the primitives you actually use.
+pnpm dlx shadcn@latest init
+pnpm dlx shadcn@latest add button input dialog
+```
+
+The Flux host runtime ALREADY ships its own copies of these
+deps; community plugins re-installing them locally only affects
+the plugin's `dist/index.js` bundle size (≤ ~30 KB after
+tree-shake) and does NOT cause version drift at runtime because
+`react` + `react-dom` are externalised peer-deps.
 
 ## Minimum plugin entry
 

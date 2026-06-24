@@ -65,6 +65,14 @@ export default defineConfig(async () => ({
         find: /^@flux\/plugin-canvas$/,
         replacement: resolve(__dirname, "plugins/canvas/src/index.ts"),
       },
+      {
+        find: /^@flux\/plugin-excalidraw\/manifest$/,
+        replacement: resolve(__dirname, "plugins/excalidraw/manifest.json"),
+      },
+      {
+        find: /^@flux\/plugin-excalidraw$/,
+        replacement: resolve(__dirname, "plugins/excalidraw/src/index.ts"),
+      },
       { find: "@/", replacement: resolve(__dirname, "src") + "/" },
       { find: "@", replacement: resolve(__dirname, "src") },
     ],

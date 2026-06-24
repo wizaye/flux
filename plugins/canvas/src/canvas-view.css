@@ -127,7 +127,7 @@
      Avoids the "floating ugly blob" look. */
   background: var(--card, var(--bg-sidebar, #1e1e22));
   border: 1px solid var(--border, var(--border-soft, rgba(255, 255, 255, 0.16)));
-  border-radius: 6px;
+  border-radius: 8px;
   color: var(--card-foreground, var(--text-normal));
   display: flex;
   /* visible so the side connector dots (positioned half outside the
@@ -139,14 +139,19 @@
      as a left-edge stripe so the body stays readable. */
   --node-accent: transparent;
   border-left: 3px solid var(--node-accent, transparent);
-  transition: border-color 100ms ease, background 100ms ease;
+  transition: border-color 100ms ease, background 100ms ease, box-shadow 100ms ease;
 }
 .canvas-node:hover {
   border-color: var(--border, color-mix(in oklch, var(--ring, #8a6cd1) 40%, var(--border, transparent) 60%));
 }
 .canvas-node.selected {
+  /* 2px ring with a 1px outer offset — matches Figma / Lattice
+   * selection chrome and reads clearly without the cheap "thin line"
+   * feel a single-px border gives. */
   border-color: var(--ring, var(--accent, #8a6cd1));
-  box-shadow: 0 0 0 1px var(--ring, var(--accent, #8a6cd1));
+  box-shadow:
+    0 0 0 1px var(--background, var(--bg-app, #1e1e22)),
+    0 0 0 3px var(--ring, var(--accent, #8a6cd1));
 }
 .canvas-node.editing {
   cursor: text;
@@ -207,15 +212,24 @@
 /* ----- Edge connectors (the little dots on a card's 4 sides) -------- */
 .canvas-connector {
   position: absolute;
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
   background: var(--accent, #8a6cd1);
-  border: 2px solid var(--bg-app);
+  border: 1.5px solid var(--bg-app, var(--background, #1e1e22));
   cursor: crosshair;
+  /* Hidden by default — fade in only when the user hovers the card
+   * or it's selected. Always-visible connector dots feel cheap on
+   * an idle canvas. The hit target stays large via ::after below. */
+  opacity: 0;
+  transition: opacity 120ms ease;
   /* Inflate the hit target with a pseudo-element so users don't have
-     to land exactly on the visible 10px circle. */
+     to land exactly on the visible 8px circle. */
   z-index: 2;
+}
+.canvas-node:hover .canvas-connector,
+.canvas-node.selected .canvas-connector {
+  opacity: 1;
 }
 .canvas-connector::after {
   content: "";
@@ -664,14 +678,18 @@
   pointer-events: none;
 }
 
-/* ----- Alignment guides (Figma-style magenta lines at snap edges) -- */
-/* Solid 1.25px magenta line, non-scaling stroke so it stays crisp at
- * any zoom. Dashed lines were too easy to lose against the dot grid. */
+/* ----- Alignment guides (Figma-style) ------------------------------ */
+/* Cleaner blue at 90% alpha — reads on both light and dark grids
+ * without the harsh "laser pointer" feel of pure magenta. Slightly
+ * thinner stroke + `vector-effect: non-scaling-stroke` keeps it
+ * crisp regardless of zoom; `shape-rendering="crispEdges"` on the
+ * element itself snaps the line to the pixel grid so it never
+ * appears as a half-pixel ghost. */
 .canvas-guide {
-  stroke: #ff3b8b;
-  stroke-width: 1.25;
+  stroke: #4c9ffe;
+  stroke-width: 1;
   stroke-linecap: round;
-  opacity: 0.95;
+  opacity: 0.9;
   pointer-events: none;
   vector-effect: non-scaling-stroke;
 }

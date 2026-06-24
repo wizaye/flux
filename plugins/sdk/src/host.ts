@@ -120,15 +120,42 @@ export function createPluginHost(opts: CreatePluginHostOptions): PluginHost {
   const workspace: WorkspaceApi = {
     async openPath(path: string): Promise<void> {
       await call(opts, "workspace.open", "workspace", "openPath", { path });
+      // Broker has validated the request; route the actual tab
+      // switch through the host event bus so we don't have to
+      // thread `AppHandle` into a Rust handler that needs to
+      // touch the React tab system.
+      if (typeof window !== "undefined") {
+        try {
+          window.dispatchEvent(
+            new CustomEvent("flux-open-file", { detail: { fileId: path } }),
+          );
+        } catch {
+          /* non-DOM environment (tests) */
+        }
+      }
     },
     async revealInSidebar(path: string): Promise<void> {
-      // Pending broker handler — surface a notice so plugins
-      // depending on the contract don't silently fail.
-      await workspace.showNotice({
-        title: "Reveal in sidebar requested",
-        message: path,
-        tone: "info",
-      });
+      // Dedicated `workspace.reveal` capability — the host gates
+      // this separately so a plugin that just wants to open a file
+      // in a tab doesn't get sidebar-scroll access too.
+      await call(
+        opts,
+        "workspace.reveal",
+        "workspace",
+        "revealInSidebar",
+        { path },
+      );
+      if (typeof window !== "undefined") {
+        try {
+          window.dispatchEvent(
+            new CustomEvent("flux-reveal-in-sidebar", {
+              detail: { fileId: path },
+            }),
+          );
+        } catch {
+          /* non-DOM environment (tests) */
+        }
+      }
     },
     async showNotice({ title, message, tone }) {
       // Broker validates payload shape; toast surface is the

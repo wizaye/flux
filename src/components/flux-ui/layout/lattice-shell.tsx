@@ -140,7 +140,7 @@ function readEnum<T extends string>(
   }
 }
 
-const LEFT_VIEWS = ["files", "search", "bookmarks", "changes", "calendar"] as const;
+const LEFT_VIEWS = ["files", "search", "bookmarks", "changes", "calendar", "tasks"] as const;
 const RIGHT_VIEWS = ["links", "outgoing", "tags", "outline"] as const;
 
 // ── Editor-tree persistence helpers ─────────────────────────────────

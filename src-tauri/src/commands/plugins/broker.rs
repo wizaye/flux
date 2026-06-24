@@ -22,7 +22,7 @@
 //! `error.code` and surface a localised message.
 
 use crate::commands::fs::common::{get_db_pool, get_vault_path};
-use crate::commands::fs::{list_directory_impl, read_file_impl, write_file_impl};
+use crate::commands::fs::{list_directory_impl, read_file_impl, search_files_impl, write_file_impl};
 use crate::commands::plugins::dto::{
     PluginBackendError, PluginBackendRequest, PluginBackendResponse, PluginManifestDto,
 };
@@ -91,7 +91,8 @@ pub async fn dispatch(
         ("vault", "listDir") => vault_list_dir(&req, state).await,
         ("workspace", "showNotice") => workspace_show_notice(&req),
         ("workspace", "openPath") => workspace_open_path(&req),
-        ("search", "query") => search_query(&req),
+        ("workspace", "revealInSidebar") => workspace_reveal_in_sidebar(&req),
+        ("search", "query") => search_query(&req, state).await,
         ("plugin.storage", "get") => storage_get(&req, state).await,
         ("plugin.storage", "set") => storage_set(&req, state).await,
         ("plugin.storage", "delete") => storage_delete(&req, state).await,
@@ -113,6 +114,7 @@ fn capability_for(contract: &str, action: &str) -> Option<&'static str> {
         ("vault", "listDir") => "vault.list",
         ("workspace", "showNotice") => "workspace.notice",
         ("workspace", "openPath") => "workspace.open",
+        ("workspace", "revealInSidebar") => "workspace.reveal",
         ("search", "query") => "search.query",
         ("plugin.storage", "get") => "plugin.storage.read",
         ("plugin.storage", "set") => "plugin.storage.write",
@@ -223,18 +225,55 @@ fn workspace_open_path(req: &PluginBackendRequest) -> PluginBackendResponse {
         Ok(p) => p,
         Err(e) => return err("bad_payload", e),
     };
-    // File open routes through the frontend tab system; the host
-    // contract is a no-op today, validated for shape only.
+    // The broker only validates the request shape — the actual
+    // "switch the active tab to this file" lives in the frontend
+    // tab system. The SDK's `host.workspace.openPath()` dispatches
+    // a `flux-open-file` window event after this call returns OK,
+    // which the host's lattice-shell already listens for.
     let _ = payload;
     ok_null()
 }
 
-fn search_query(req: &PluginBackendRequest) -> PluginBackendResponse {
-    // Search backend lives in the frontend index today. Stub
-    // returns an empty result set so contract callers degrade
-    // gracefully until the Rust FTS path lands.
-    let _ = req;
-    ok_value(&serde_json::Value::Array(vec![]))
+fn workspace_reveal_in_sidebar(req: &PluginBackendRequest) -> PluginBackendResponse {
+    let payload: PathPayload = match decode(&req.payload_json) {
+        Ok(p) => p,
+        Err(e) => return err("bad_payload", e),
+    };
+    // Same pattern as `openPath` — the broker is just the
+    // capability gate; the SDK fires `flux-reveal-in-sidebar`
+    // after a successful response and the file explorer panel
+    // scrolls + highlights the row.
+    let _ = payload;
+    ok_null()
+}
+
+async fn search_query(
+    req: &PluginBackendRequest,
+    state: Arc<AppState>,
+) -> PluginBackendResponse {
+    #[derive(Deserialize)]
+    struct SearchPayload {
+        text: String,
+        #[serde(default)]
+        limit: Option<u32>,
+    }
+    let payload: SearchPayload = match decode(&req.payload_json) {
+        Ok(p) => p,
+        Err(e) => return err("bad_payload", e),
+    };
+    // Empty query → empty result. The host's FTS5 wrapper would
+    // bubble an `unrecognized token` error on this; rejecting at
+    // the broker keeps the contract idempotent.
+    if payload.text.trim().is_empty() {
+        return ok_value(&serde_json::Value::Array(vec![]));
+    }
+    match search_files_impl(payload.text, payload.limit, &state).await {
+        Ok(hits) => match serde_json::to_value(hits) {
+            Ok(v) => ok_value(&v),
+            Err(e) => err("encode_failed", e.to_string()),
+        },
+        Err(e) => err("search_failed", e.to_string()),
+    }
 }
 
 async fn storage_get(

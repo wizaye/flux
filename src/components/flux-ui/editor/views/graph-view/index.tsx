@@ -160,15 +160,18 @@ export function GraphView(props: EditorViewProps) {
   const [showOrphans, setShowOrphans] = useState(true);
 
   // Display
-  const [textFadeThreshold, setTextFadeThreshold] = useState(1.5);
-  const [nodeSize, setNodeSize] = useState(4);
-  const [linkThickness, setLinkThickness] = useState(0.6);
+  const [textFadeThreshold, setTextFadeThreshold] = useState(1.2);
+  const [nodeSize, setNodeSize] = useState(8);
+  const [linkThickness, setLinkThickness] = useState(1.2);
 
-  // Forces
-  const [centerForce, setCenterForce] = useState(0.5);
-  const [repelForce, setRepelForce] = useState(10);
-  const [linkForce, setLinkForce] = useState(0.4);
-  const [linkDistance, setLinkDistance] = useState(150);
+  // Forces — tuned for a compact, Obsidian-ish layout. The previous
+  // defaults (centerForce 0.5, repelForce 10, linkDistance 150)
+  // produced an archipelago feel even on tiny vaults; tighter
+  // values keep the network legible without manual sliders.
+  const [centerForce, setCenterForce] = useState(0.8);
+  const [repelForce, setRepelForce] = useState(5);
+  const [linkForce, setLinkForce] = useState(0.5);
+  const [linkDistance, setLinkDistance] = useState(90);
 
   // Build the raw graph. Prefer the Rust-side link index when it's
   // populated (every real-vault edit incrementally maintains it);
@@ -215,13 +218,13 @@ export function GraphView(props: EditorViewProps) {
   const handleReset = () => {
     setSearchQuery("");
     setShowOrphans(true);
-    setTextFadeThreshold(1.5);
-    setNodeSize(4);
-    setLinkThickness(0.6);
-    setCenterForce(0.5);
-    setRepelForce(10);
-    setLinkForce(0.4);
-    setLinkDistance(150);
+    setTextFadeThreshold(1.2);
+    setNodeSize(8);
+    setLinkThickness(1.2);
+    setCenterForce(0.8);
+    setRepelForce(5);
+    setLinkForce(0.5);
+    setLinkDistance(90);
   };
 
   // No notes yet — short-circuit before initialising the simulation

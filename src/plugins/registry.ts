@@ -28,6 +28,7 @@ import type { PluginManifest } from "@flux/plugin-sdk/types";
 
 // Eager manifest imports — JSON-only, tiny.
 import canvasManifest from "@flux/plugin-canvas/manifest";
+import excalidrawManifest from "@flux/plugin-excalidraw/manifest";
 import kanbanManifest from "@flux/plugin-kanban/manifest";
 
 /** Lazy loader contract for builtin plugins. */
@@ -45,6 +46,13 @@ export const BUILTIN_PLUGINS: Record<string, BuiltinPluginEntry> = {
     load: async () => {
       const mod = await import("@flux/plugin-canvas");
       return mod.CanvasComponents as unknown as BuiltinComponentRefs;
+    },
+  },
+  excalidraw: {
+    manifest: excalidrawManifest as PluginManifest,
+    load: async () => {
+      const mod = await import("@flux/plugin-excalidraw");
+      return mod.ExcalidrawComponents as unknown as BuiltinComponentRefs;
     },
   },
   kanban: {

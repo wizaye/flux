@@ -16,6 +16,7 @@ import { useLinkIndexer } from "./hooks/use-link-indexer";
 import { useAutosave } from "./hooks/use-autosave";
 import { bootPlugins } from "./plugins/boot";
 import { refreshExternalPlugins } from "./plugins/install";
+import { usePluginNoticeBridge } from "./plugins/notice-bridge";
 import { getLastVaultPath, isTauri } from "./bindings";
 import { GlobalBusyOverlay } from "./components/flux-ui/common/global-busy-overlay";
 import { withBusy } from "./state/busy-store";
@@ -61,6 +62,12 @@ function FullShell() {
   React.useEffect(() => {
     void bootPlugins();
   }, []);
+
+  // Pipe plugin-fired notice events into the host sonner toaster.
+  // (Plugin file-open requests come through the same `flux-open-file`
+  // window event the rest of the app already listens for in
+  // lattice-shell, so no separate bridge is needed.)
+  usePluginNoticeBridge();
 
   // Listen for backend `flux://fs-changed` events and quietly refresh
   // the vault tree when external edits land. Hook is a no-op in

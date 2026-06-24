@@ -1,0 +1,43 @@
+{
+  "id": "excalidraw",
+  "name": "Excalidraw",
+  "version": "0.1.0",
+  "author": "Flux Community",
+  "description": "Hand-drawn whiteboards powered by Excalidraw. Files are plain `*.excalidraw` JSON in your vault and round-trip with the Excalidraw web app and the Obsidian Excalidraw plugin.",
+  "minAppVersion": "0.1.0",
+  "apiVersion": "1.0",
+  "capabilities": {
+    "required": ["vault.read", "vault.write"],
+    "optional": ["workspace.notice"]
+  },
+  "contributes": {
+    "activityBarItem": {
+      "id": "excalidraw",
+      "iconUrl": "lucide:palette",
+      "tooltip": "Excalidraw",
+      "placement": "left"
+    },
+    "sidebarPanel": {
+      "id": "excalidraw-panel",
+      "bundleUrl": "dist/index.js",
+      "placement": "left"
+    },
+    "editorViews": [
+      {
+        "extensions": [".excalidraw"],
+        "bundleUrl": "dist/index.js"
+      }
+    ],
+    "commands": [
+      {
+        "id": "excalidraw.new",
+        "label": "Excalidraw: New whiteboard",
+        "palette": true
+      }
+    ],
+    "settingsPanel": {
+      "label": "Excalidraw",
+      "bundleUrl": "dist/index.js"
+    }
+  }
+}

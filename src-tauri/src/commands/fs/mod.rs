@@ -13,10 +13,13 @@ use tauri::State;
 use uuid::Uuid;
 
 pub mod common;
+pub mod gitignore;
 pub mod paths;
+pub mod tasks;
 pub mod wikilink;
 
 use common::{canonicalise_rel, validate_and_resolve_path};
+use gitignore::{load_root_gitignore, matches_gitignore};
 use paths::{
     derive_original_path_from_archive, derive_original_path_from_trash,
     is_indexable_text, is_ignored_in_tree, is_under_trash_or_archive, is_vault_metadata,
@@ -233,6 +236,14 @@ pub async fn write_file_impl(
         // Upsert FTS row (no-op body for non-indexable files just
         // removes them from search results, which is what we want).
         db::repo::fts_upsert(conn, &path_for_fts, &title_for_fts, &body_for_fts)?;
+        // Re-extract Markdown task lines so the global Tasks index
+        // is up-to-date the instant the file lands on disk —
+        // doesn't wait for the watcher debounce.
+        if is_indexable_text(&path_for_fts) && !body_for_fts.is_empty() {
+            let parsed = tasks::parse_tasks(&body_for_fts);
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            tasks::reindex_file_tasks(conn, &path_for_fts, &parsed, now_ms)?;
+        }
         Ok(())
     })
     .await
@@ -777,7 +788,11 @@ fn build_file_tree(
     pool: &crate::db::DbPool,
 ) -> Result<Vec<FileTreeNode>, AppError> {
     let mut nodes = Vec::new();
-    build_tree_recursive(vault_path, vault_path, 0, None, &mut nodes, pool)?;
+    // Build the root `.gitignore` matcher once and thread it down
+    // the walk. Absent file → `None`, which the inner predicate
+    // treats as "match nothing".
+    let gi = load_root_gitignore(vault_path);
+    build_tree_recursive(vault_path, vault_path, 0, None, &mut nodes, pool, gi.as_ref())?;
     Ok(nodes)
 }
 
@@ -788,6 +803,7 @@ fn build_tree_recursive(
     parent_id: Option<String>,
     nodes: &mut Vec<FileTreeNode>,
     pool: &crate::db::DbPool,
+    gi: Option<&ignore::gitignore::Gitignore>,
 ) -> Result<(), AppError> {
     let entries = std::fs::read_dir(current_path)?;
 
@@ -814,6 +830,17 @@ fn build_tree_recursive(
                 .ok_or_else(|| AppError::Other("Invalid UTF-8 in path".to_string()))?,
         );
 
+        // `.gitignore` filter — applied AFTER the hard-coded
+        // predicates so a user's negation pattern (`!important.md`)
+        // can re-include something git would normally hide. We hide
+        // the directory itself when matched: skipping the recursion
+        // below also drops every descendant.
+        if let Some(gi) = gi {
+            if matches_gitignore(gi, &relative, metadata.is_dir()) {
+                continue;
+            }
+        }
+
         let name = entry.file_name().to_str().unwrap().to_string();
         let modified_at = metadata
             .modified()?
@@ -838,7 +865,7 @@ fn build_tree_recursive(
             });
 
             // Recursively process subdirectory
-            build_tree_recursive(vault_path, &path, depth + 1, Some(relative), nodes, pool)?;
+            build_tree_recursive(vault_path, &path, depth + 1, Some(relative), nodes, pool, gi)?;
         } else {
             let size = metadata.len();
 

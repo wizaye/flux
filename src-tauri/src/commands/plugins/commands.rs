@@ -8,7 +8,8 @@ use crate::commands::plugins::dto::{
     InstallResult, PluginBackendRequest, PluginBackendResponse, ScannedPlugin,
 };
 use crate::commands::plugins::install::{
-    install_from_folder, install_from_zip, uninstall as uninstall_impl,
+    install_from_bytes, install_from_folder, install_from_zip,
+    uninstall as uninstall_impl,
 };
 use crate::commands::plugins::scanner;
 use crate::state::AppState;
@@ -53,6 +54,18 @@ pub async fn install_plugin_from_zip(
     state: State<'_, Arc<AppState>>,
 ) -> Result<InstallResult, AppError> {
     install_from_zip(&PathBuf::from(zip_path), &state)
+}
+
+/// Install a plugin from a downloaded byte buffer. The frontend's
+/// marketplace flow fetches a zip from a URL via standard `fetch()`
+/// (with WebCrypto-based sha256 verification when the registry
+/// supplies a checksum) and hands the resulting bytes here.
+#[tauri::command]
+pub async fn install_plugin_from_bytes(
+    bytes: Vec<u8>,
+    state: State<'_, Arc<AppState>>,
+) -> Result<InstallResult, AppError> {
+    install_from_bytes(&bytes, &state)
 }
 
 /// Uninstall a plugin by id. Removes the on-disk folder and wipes

@@ -98,6 +98,92 @@ function readThemeColors() {
  * that you then invoke with the host element — `ForceGraph()(el)`.
  * This alias keeps the call-site readable.
  */
+
+/**
+ * Elastic radial-boundary force.
+ *
+ * Why: d3-force's `forceCenter` is linear. As the graph grows past
+ * ~50 nodes, N² charge repulsion overwhelms the center pull and
+ * isolated components silently drift past the viewport edge.
+ * `forceCenter` can't fix this without a strength so high it crushes
+ * the natural layout.
+ *
+ * What we add: a custom force that lets nodes move freely inside a
+ * radius `R`, then applies an inward restoring velocity proportional
+ * to how far past `R` they've travelled. Effect feels like a soft
+ * rubber band — nodes "stretch out" then snap back without the hard
+ * pop a hard clamp would cause.
+ *
+ * `R` is content-aware (scales with √nodes × linkDistance) so dense
+ * graphs get more room and sparse graphs stay compact. The bound is
+ * applied per-tick via the standard d3-force custom-force protocol
+ * (`initialize(nodes)` captures the array, the function itself
+ * receives `alpha` and mutates `node.vx`/`node.vy`).
+ *
+ * Pinned nodes (`fx`/`fy` set) are skipped — they don't have
+ * meaningful velocity to correct.
+ */
+interface BoundableNode {
+  x?: number;
+  y?: number;
+  vx?: number;
+  vy?: number;
+  fx?: number | null;
+  fy?: number | null;
+}
+
+function installRadialBound(inst: unknown): void {
+  let captured: BoundableNode[] = [];
+  // Recomputed inside the force on the first tick after a graph-data
+  // change so newly-added nodes are clamped immediately without
+  // waiting for a re-install.
+  let cachedRadius = 0;
+  let cachedCount = -1;
+
+  const force: ((alpha: number) => void) & {
+    initialize?: (nodes: BoundableNode[]) => void;
+  } = (alpha: number) => {
+    if (captured.length === 0) return;
+    if (captured.length !== cachedCount) {
+      cachedCount = captured.length;
+      // 50 world-units per √node, floored at 350 so a tiny graph
+      // doesn't bunch up but a 10-node vault stays compact. This
+      // is materially tighter than the previous formula (80 ×
+      // √n, floor 600) which left small vaults looking like
+      // archipelagos of isolated nodes.
+      cachedRadius = Math.max(350, Math.sqrt(captured.length) * 50);
+    }
+    const R = cachedRadius;
+    for (const n of captured) {
+      if (n.fx != null || n.fy != null) continue;
+      const x = n.x ?? 0;
+      const y = n.y ?? 0;
+      const r = Math.hypot(x, y);
+      if (r <= R || r === 0) continue;
+      // Strength grows with overshoot so a node 2R out gets pulled
+      // back harder than one 1.1R out. The `alpha` factor follows
+      // d3-force's heat-cooling so the boundary relaxes in unison
+      // with the rest of the simulation.
+      const overshoot = (r - R) / R;
+      const pull = alpha * (overshoot * overshoot + 0.2);
+      // 60 is a velocity-units constant chosen so the boundary
+      // dominates charge repulsion at the overshoot=1 mark.
+      const k = pull * 60;
+      n.vx = (n.vx ?? 0) - (x / r) * k;
+      n.vy = (n.vy ?? 0) - (y / r) * k;
+    }
+  };
+  force.initialize = (nodes: BoundableNode[]) => {
+    captured = nodes;
+    cachedCount = -1; // trigger radius recompute on next tick
+  };
+
+  // `d3Force(name, force)` registers a custom force in the underlying
+  // d3-force simulation. force-graph re-runs init on graphData()
+  // changes so we don't need to re-install after data updates.
+  (inst as { d3Force?: (name: string, force: unknown) => void })
+    .d3Force?.("radial-bound", force);
+}
 type ForceGraphFactory = () => (el: HTMLElement) => ForceGraphInstance;
 type ForceGraphInstance = {
   // Just enough surface to satisfy the call sites; everything else
@@ -238,11 +324,27 @@ const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
         .enableZoomInteraction(true)
         .enablePointerInteraction(true)
         .enableNodeDrag(true)
-        // Fluid feel: lower velocity decay (default 0.4) makes nodes
-        // glide and bounce elastically instead of snapping into place;
-        // lower alpha decay lets the sim breathe longer.
-        .d3VelocityDecay(0.15)
-        .d3AlphaDecay(0.01)
+        // Snappy settle: d3-force defaults are good for an
+        // interactive simulation. The previous low values
+        // (0.15/0.01) produced an indefinite "floating" feel
+        // where nodes never quite stopped drifting. Defaults
+        // (0.4/0.0228) settle in <1 s and let any drag
+        // perturbation relax cleanly.
+        .d3VelocityDecay(0.4)
+        .d3AlphaDecay(0.0228)
+        // Pre-warm the simulation off-screen. force-graph runs
+        // `warmupTicks` ticks before painting the first frame,
+        // so the network appears already settled instead of
+        // jiggling into place. 200 ticks is enough for any
+        // realistic vault size to converge.
+        .warmupTicks(200)
+        // After the initial paint the live simulation cools off
+        // quickly — caps at 4 s OR 100 ticks, whichever comes
+        // first. Dragging a node re-heats, so the user still gets
+        // organic relaxation on interaction; idle graphs stay
+        // perfectly still.
+        .cooldownTime(4000)
+        .cooldownTicks(100)
         // Custom link renderer. With focus active, "incident" links
         // (those touching the selected node) draw bright on top while
         // every other link draws at very low alpha. Mode "replace"
@@ -308,7 +410,6 @@ const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
 
             let fillColor: string;
             let labelColor: string;
-            let forceLabel = false;
 
             if (!selectedId) {
               fillColor = c.node;
@@ -316,11 +417,9 @@ const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
             } else if (node.id === selectedId) {
               fillColor = c.nodeHighlight;
               labelColor = c.nodeHighlight;
-              forceLabel = true;
             } else if (!dimmed) {
               fillColor = c.node;
               labelColor = c.nodeMuted;
-              forceLabel = true;
             } else {
               fillColor = c.node;
               labelColor = c.nodeMuted;
@@ -329,35 +428,65 @@ const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
             const prevAlpha = ctx.globalAlpha;
             if (dimmed) ctx.globalAlpha = prevAlpha * DIM_NODE_ALPHA;
 
-            const radius = Math.sqrt(node.val ?? 1) * nodeSize;
+            // Two floors on the visible radius:
+            //   • World-space `nodeSize * 0.9` so isolated nodes
+            //     never shrink below a fraction of a hub when zoomed
+            //     in close.
+            //   • Screen-space `MIN_SCREEN_PX / scale` so auto-fit on
+            //     a sparse vault never collapses nodes to specks.
+            //     `val` is `1 + √degree` from GraphView's data
+            //     builder, so hubs still grow proportionally.
+            const baseRadius = Math.sqrt(node.val ?? 1) * nodeSize;
+            const worldFloor = nodeSize * 0.9;
+            const MIN_SCREEN_PX = 6;
+            const screenFloor = MIN_SCREEN_PX / scale;
+            const radius = Math.max(baseRadius, worldFloor, screenFloor);
+
+            // Solid fill only — Obsidian-style. No radial halo: a
+            // gradient aura overpowers the rest of the network and
+            // feels heavy. The selection signal comes from
+            // (a) the colour flip on the focused node + neighbours,
+            // (b) the heavy dimming on everything else.
             ctx.beginPath();
             ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI, false);
             ctx.fillStyle = fillColor;
             ctx.fill();
 
-            // Outline the selected node so it pops even more.
+            // Subtle 1px outline on the selected node so it reads
+            // even at low contrast (e.g. against a similar-colour
+            // neighbour). No outline on neighbours — they're
+            // distinguished by colour alone.
             if (node.id === selectedId) {
-              ctx.lineWidth = 2 / scale;
+              ctx.lineWidth = 1.5 / scale;
               ctx.strokeStyle = c.nodeHighlight;
               ctx.beginPath();
               ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI, false);
               ctx.stroke();
             }
 
-            if (!dimmed && (scale > textFadeThreshold || forceLabel)) {
-              // Font scales inversely with zoom so labels stay a
-              // consistent on-screen size. Dimmed nodes never get
-              // labels — they're meant to recede into the backdrop.
+            if (!dimmed) {
+              // Labels are always rendered at default zoom —
+              // matching Obsidian. The font scales inversely with
+              // zoom so on-screen size stays constant. Below the
+              // fade threshold (deep zoom-out) the label fades
+              // smoothly to zero so a 1000-node vault doesn't
+              // become an unreadable text wall.
               const fontSize = Math.max(10, 14 / scale);
-              ctx.font = `${fontSize}px Inter, sans-serif`;
-              ctx.textAlign = "center";
-              ctx.textBaseline = "middle";
-              ctx.fillStyle = labelColor;
-              ctx.fillText(
-                node.name ?? "",
-                node.x,
-                node.y + radius + fontSize * 0.9,
-              );
+              const labelAlpha = scale >= textFadeThreshold
+                ? 1
+                : Math.max(0, scale / textFadeThreshold);
+              if (labelAlpha > 0.01) {
+                ctx.font = `${fontSize}px Inter, sans-serif`;
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillStyle = labelColor;
+                ctx.globalAlpha = prevAlpha * labelAlpha;
+                ctx.fillText(
+                  node.name ?? "",
+                  node.x,
+                  node.y + radius + fontSize * 0.9,
+                );
+              }
             }
 
             ctx.globalAlpha = prevAlpha;
@@ -438,8 +567,18 @@ const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
       //     much larger; tighter values jam edges through node centers.
       //   • center: strong pull toward (0,0) so disconnected nodes
       //     and isolated components don't drift off-camera.
-      inst.d3VelocityDecay(0.15);
-      inst.d3AlphaDecay(0.01);
+      //   • radial-bound (CUSTOM): elastic outer wall. The center
+      //     force alone is linear and dwarfed by N² charge repulsion
+      //     when the graph has hundreds of nodes, so isolated
+      //     components silently escape the viewport. This force
+      //     applies a restoring velocity when a node passes a
+      //     content-aware radius; like a soft rubber-band around
+      //     the visible region.
+      // Match the snappy decay set on the FG instance above so
+      // when this re-init path runs (force tuning effect) it
+      // doesn't accidentally unfreeze a settled graph.
+      inst.d3VelocityDecay(0.4);
+      inst.d3AlphaDecay(0.0228);
       const charge = inst.d3Force?.("charge");
       if (charge?.strength) charge.strength(-repelForce * 16);
       if (charge?.distanceMax) charge.distanceMax(500);
@@ -448,6 +587,7 @@ const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
       if (link?.strength) link.strength(linkForce);
       const center = inst.d3Force?.("center");
       if (center?.strength) center.strength(centerForce);
+      installRadialBound(inst);
 
       // ── Custom wheel routing ───────────────────────────────────
       // Three input devices generate `wheel` events:
@@ -495,12 +635,22 @@ const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
       if (el.clientWidth && el.clientHeight) {
         inst.width(el.clientWidth).height(el.clientHeight);
       }
+      // Throttle ResizeObserver via a single rAF tick. Without
+      // this, dragging the right sidebar's resize handle fires
+      // dozens of width/height updates per frame — each one
+      // forces force-graph to reallocate its canvas buffers,
+      // which produces the visible "glitchy" resize behaviour.
+      let resizeRaf = 0;
       const ro = new ResizeObserver(() => {
-        if (!instanceRef.current) return;
-        const { clientWidth, clientHeight } = el;
-        if (clientWidth && clientHeight) {
-          instanceRef.current.width(clientWidth).height(clientHeight);
-        }
+        if (resizeRaf) return;
+        resizeRaf = requestAnimationFrame(() => {
+          resizeRaf = 0;
+          if (!instanceRef.current) return;
+          const { clientWidth, clientHeight } = el;
+          if (clientWidth && clientHeight) {
+            instanceRef.current.width(clientWidth).height(clientHeight);
+          }
+        });
       });
       ro.observe(el);
 
@@ -527,6 +677,10 @@ const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(
 
       return () => {
         ro.disconnect();
+        if (resizeRaf) {
+          cancelAnimationFrame(resizeRaf);
+          resizeRaf = 0;
+        }
         themeObs.disconnect();
         el.removeEventListener("wheel", onWheel, { capture: true } as any);
         el.removeEventListener("pointerdown", onPointerDown);

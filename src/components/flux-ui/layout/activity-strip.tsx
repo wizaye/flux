@@ -4,6 +4,7 @@ import { IconButton } from "@/components/flux-ui/common/icon-button";
 import {
   IcBook,
   IcCalendar,
+  IcChecklist,
   IcCloudUpload,
   IcFiles,
   IcGraph,
@@ -11,6 +12,7 @@ import {
   IcTerminal,
 } from "@/components/flux-ui/common/icons";
 import { usePluginStore } from "@/state/plugin-store";
+import { resolvePluginIcon } from "@/plugins/icon-resolver";
 /**
  * Vertical activity strip — body of the `lstrip` column. The column
  * wrapper (with its own `col-header` and dividers) lives in
@@ -36,7 +38,7 @@ import { usePluginStore } from "@/state/plugin-store";
  * sidebar contract — they fire onAction with the entry id.
  */
 
-export type LeftView = "files" | "search" | "bookmarks" | "changes" | "calendar";
+export type LeftView = "files" | "search" | "bookmarks" | "changes" | "calendar" | "tasks";
 
 export type StripActionId =
   | "graph"
@@ -76,6 +78,7 @@ const ENTRIES: Array<ViewEntry | ActionEntry> = [
   { kind: "view",   id: "calendar", label: "Calendar", Icon: IcCalendar },
   { kind: "view",   id: "changes",  label: "Source Control", Icon: IcSourceControl },
   { kind: "view",   id: "files",    label: "Files",   Icon: IcFiles },
+  { kind: "view",   id: "tasks",    label: "Tasks",   Icon: IcChecklist },
   { kind: "action", id: "terminal", label: "Run command (⌘K)", Icon: IcTerminal },
   { kind: "action", id: "book",     label: "New paper",   Icon: IcBook },
   { kind: "action", id: "publish",  label: "Publish", Icon: IcCloudUpload },
@@ -125,16 +128,18 @@ export function ActivityStrip({
             aria-hidden
           />
           {pluginContributions.map(({ pluginId, item }) => {
-            const PluginIcon = builtinComponents[pluginId]?.activityBarIcon;
-            // External plugins (Phase C) will ship an SVG via
-            // `iconUrl`. The `lucide:<name>` syntax is reserved for
-            // BUILT-IN plugins which provide a React component ref;
-            // if the component isn't resolved yet (rare race during
-            // boot) we render a neutral square instead of a broken
-            // <img>.
-            const looksLikeRealUrl =
-              typeof item.iconUrl === "string" &&
-              /^(https?:|data:|asset:|\/)/.test(item.iconUrl);
+            // `resolvePluginIcon` returns the right artefact:
+            //   1. React `activityBarIcon` from the plugin's
+            //      Components export (built-ins + external plugins
+            //      that bundle their icon as JSX),
+            //   2. `lucide:<name>` → looked up in lucide-react,
+            //   3. relative path → `asset://` URL via convertFileSrc,
+            //   4. fallback → neutral square (icon missing, hydration race).
+            // Subscribing to `builtinComponents` upstream guarantees
+            // this re-renders the instant lazy hydration completes.
+            const _refs = builtinComponents[pluginId];
+            void _refs;
+            const icon = resolvePluginIcon(pluginId, item.iconUrl);
             return (
               <IconButton
                 key={`plugin-${pluginId}`}
@@ -144,19 +149,16 @@ export function ActivityStrip({
                 tooltipSide="right"
                 onClick={() => onPluginPanel?.(pluginId)}
               >
-                {PluginIcon ? (
-                  <PluginIcon />
-                ) : looksLikeRealUrl ? (
+                {icon.kind === "component" ? (
+                  <icon.Component />
+                ) : icon.kind === "url" ? (
                   <img
-                    src={item.iconUrl}
+                    src={icon.url}
                     alt={item.tooltip}
                     className="size-[18px] opacity-70"
                     aria-hidden
                   />
                 ) : (
-                  // Built-in plugin whose component refs haven't
-                  // landed yet. Hidden placeholder keeps layout
-                  // stable across the one-frame window.
                   <span
                     aria-hidden
                     className="block size-[18px] rounded-sm border border-current opacity-30"

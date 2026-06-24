@@ -88,6 +88,8 @@ fn run_migrations(conn: &mut Connection) -> Result<()> {
         // 004 adds the per-plugin scoped key/value store used by the
         // plugin broker's PluginStorageApi handler.
         M::up(include_str!("../../migrations/004_plugin_storage.sql")),
+        // 005 adds the Markdown tasks index — feature §5.
+        M::up(include_str!("../../migrations/005_tasks.sql")),
         // Future migrations go here
     ]);
 

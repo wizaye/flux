@@ -1505,12 +1505,18 @@ export function CanvasView({ source, onChange }: Props) {
       const proposedDx = (e.clientX - g.startX) / viewport.zoom;
       const proposedDy = (e.clientY - g.startY) / viewport.zoom;
 
-      // Alignment snap — only consider nodes NOT being moved as
-      // alignment targets, and only the FIRST member of the moving set
-      // as the candidate edges (multi-move snaps relative to one anchor
-      // so the group stays rigid).
+      // Alignment snap — feed the snapper the drag-start origins, not
+      // the current `doc.nodes` positions. The current positions have
+      // already had previous frame's proposedDx applied, so adding
+      // proposedDx again would double-count the displacement and the
+      // projected edge would never come within threshold of any target.
       const movingIds = new Set(g.ids);
-      const movingOriginal = doc.nodes.filter((n) => movingIds.has(n.id));
+      const movingOriginal = doc.nodes
+        .filter((n) => movingIds.has(n.id))
+        .map((n) => {
+          const o = g.origins.get(n.id);
+          return o ? { ...n, x: o.x, y: o.y } : n;
+        });
       const others = doc.nodes.filter(
         (n) => !movingIds.has(n.id) && n.type !== "group",
       );
@@ -2155,12 +2161,15 @@ export function CanvasView({ source, onChange }: Props) {
             />
           )}
 
-          {/* Alignment guides — short dashed segment between the moving
-              node and the reference it's snapping to (Figma-style),
-              with a small world-unit pad on each end so the line
-              visually exceeds both edges. */}
+          {/* Alignment guides — short segment running through the
+              snap edge with a small *screen-px* pad on each end so
+              the line visually exceeds both edges without growing
+              huge at high zoom. World-unit pad scales with zoom
+              and visually disconnects from the snap edge — we
+              divide by `viewport.zoom` to keep the pad constant
+              in screen pixels. */}
           {activeGuides.map((g, i) => {
-            const pad = 12;
+            const pad = 10 / viewport.zoom; // ~10 screen-px at any zoom
             const [a, b] = g.span;
             const lo = Math.min(a, b) - pad;
             const hi = Math.max(a, b) + pad;
@@ -2172,6 +2181,7 @@ export function CanvasView({ source, onChange }: Props) {
                 x2={g.at}
                 y2={hi}
                 className="canvas-guide"
+                shapeRendering="crispEdges"
               />
             ) : (
               <line
@@ -2181,6 +2191,7 @@ export function CanvasView({ source, onChange }: Props) {
                 x2={hi}
                 y2={g.at}
                 className="canvas-guide"
+                shapeRendering="crispEdges"
               />
             );
           })}

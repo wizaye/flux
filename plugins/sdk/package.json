@@ -18,7 +18,8 @@
     "./bridge": "./src/bridge.ts"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "vendor-ui": "node scripts/vendor-ui.mjs",
+    "build": "pnpm run vendor-ui && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "prepublishOnly": "pnpm run build"
   },
@@ -27,9 +28,19 @@
     "src",
     "!src/bridge.ts",
     "!src/ui.ts",
+    "!src/ui-vendored/**",
+    "!src/ui-bundle.ts",
+    "!src/lib/**",
     "README.md",
     "LICENSE"
   ],
+  "dependencies": {
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.18.0",
+    "radix-ui": "^1.5.0",
+    "tailwind-merge": "^3.6.0"
+  },
   "peerDependencies": {
     "react": ">=18",
     "react-dom": ">=18"
@@ -62,6 +73,10 @@
       "./drag": {
         "types": "./dist/drag.d.ts",
         "import": "./dist/drag.js"
+      },
+      "./ui": {
+        "types": "./dist/ui-bundle.d.ts",
+        "import": "./dist/ui-bundle.js"
       }
     }
   }

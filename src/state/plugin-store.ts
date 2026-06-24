@@ -60,6 +60,13 @@ export interface InstalledPlugin {
    *  "external" plugins live in the user's vault and load via
    *  dynamic `import(asset://…)`. */
   loaderKind: "builtin" | "external";
+  /** Capabilities the user has explicitly approved for this plugin.
+   *  `null` means "never prompted yet" — used to gate the consent
+   *  dialog on first enable for external plugins. Built-ins skip
+   *  the prompt (registered with the full required+optional set).
+   *  An empty array means "user reviewed and approved no caps"
+   *  (still distinct from `null`). */
+  grantedCapabilities: string[] | null;
 }
 
 interface PluginState {
@@ -125,6 +132,10 @@ interface PluginState {
       loader: () => Promise<BuiltinComponentRefs>;
     }>,
   ) => void;
+  /** Record the capabilities the user just approved in the consent
+   *  dialog. Settings UI calls this before flipping `enabled` true
+   *  on a plugin whose `grantedCapabilities` is still null. */
+  grantCapabilities: (id: string, capabilities: string[]) => void;
   setEnabled: (id: string, enabled: boolean) => void;
   uninstall: (id: string) => void;
 }
@@ -200,6 +211,18 @@ async function hydrateLazy(id: string): Promise<void> {
   return promise;
 }
 
+/** Default grant for a built-in plugin = required ∪ optional.
+ *  Built-ins ship with the host binary so consenting to them
+ *  separately would be theatre — installing Flux IS the consent.
+ *  Kept as a helper so re-registration on every boot doesn't
+ *  drop user-narrowed grants (future Settings UI may let users
+ *  revoke optional caps; this preserves that). */
+function autoGrantForBuiltin(manifest: PluginManifest): string[] {
+  const req = manifest.capabilities?.required ?? [];
+  const opt = manifest.capabilities?.optional ?? [];
+  return Array.from(new Set([...req, ...opt]));
+}
+
 export const usePluginStore = create<PluginState>()(
   persist(
     (set, get) => ({
@@ -226,6 +249,14 @@ export const usePluginStore = create<PluginState>()(
             pluginDir: "",
             manifest,
             loaderKind: "builtin",
+            // Built-ins ship with the app — the user implicitly
+            // trusts them by installing Flux, so we pre-grant the
+            // full declared capability set and skip the consent
+            // dialog. Re-registration preserves the existing grant
+            // (in case a future build narrowed the list).
+            grantedCapabilities:
+              existing?.grantedCapabilities ??
+              autoGrantForBuiltin(manifest),
           };
           const plugins = existing
             ? s.plugins.map((p) => (p.id === manifest.id ? next : p))
@@ -251,6 +282,9 @@ export const usePluginStore = create<PluginState>()(
             pluginDir: "",
             manifest,
             loaderKind: "builtin",
+            grantedCapabilities:
+              existing?.grantedCapabilities ??
+              autoGrantForBuiltin(manifest),
           };
           const plugins = existing
             ? s.plugins.map((p) => (p.id === manifest.id ? next : p))
@@ -287,6 +321,21 @@ export const usePluginStore = create<PluginState>()(
           }
         }
       },
+      grantCapabilities: (id, capabilities) =>
+        set((s) => {
+          const plugins = s.plugins.map((p) =>
+            p.id === id
+              ? {
+                  ...p,
+                  grantedCapabilities: Array.from(new Set(capabilities)),
+                }
+              : p,
+          );
+          // Capabilities don't enter `derive(...)` (they don't
+          // affect contribution surfaces), so we skip the
+          // recomputation to keep set() cheap.
+          return { plugins };
+        }),
       registerExternalLazy: (manifest, pluginDir, loader, defaultEnabled = false) => {
         set((s) => {
           const existing = s.plugins.find((p) => p.id === manifest.id);
@@ -298,6 +347,10 @@ export const usePluginStore = create<PluginState>()(
             pluginDir,
             manifest,
             loaderKind: "external",
+            // External plugins never auto-grant. `null` means the
+            // consent dialog has not been shown yet — the Settings
+            // UI gates the enable toggle on this.
+            grantedCapabilities: existing?.grantedCapabilities ?? null,
           };
           const plugins = existing
             ? s.plugins.map((p) => (p.id === manifest.id ? next : p))
@@ -315,7 +368,24 @@ export const usePluginStore = create<PluginState>()(
         }
       },
       replaceExternals: (entries) => {
-        // Drop everything currently flagged external first so a
+        // Snapshot the existing grants + enabled state for every
+        // external plugin so a rescan after install/uninstall
+        // does not blank the user's consent or disable a running
+        // plugin. Re-registration below restores both.
+        const prior = new Map<
+          string,
+          { grantedCapabilities: string[] | null; enabled: boolean }
+        >();
+        for (const p of get().plugins) {
+          if (p.loaderKind === "external") {
+            prior.set(p.id, {
+              grantedCapabilities: p.grantedCapabilities,
+              enabled: p.enabled,
+            });
+          }
+        }
+
+        // Drop everything currently flagged external so a
         // freshly-uninstalled plugin disappears from the store on
         // the next rescan.
         set((s) => {
@@ -335,13 +405,28 @@ export const usePluginStore = create<PluginState>()(
             ...derive(keptPlugins),
           };
         });
-        // Now register each scanned plugin. We do this outside the
-        // single `set` above so each `registerExternalLazy` call
-        // can fire its own hydration trigger.
+
+        // Re-register each scanned plugin and restore prior state
+        // when present. `registerExternalLazy` seeds new entries
+        // with `grantedCapabilities: null` so the user gets a
+        // fresh consent prompt for genuinely-new installs.
         for (const e of entries) {
           get().registerExternalLazy(e.manifest, e.pluginDir, e.loader, false);
+          const snapshot = prior.get(e.manifest.id);
+          if (snapshot) {
+            if (snapshot.grantedCapabilities) {
+              get().grantCapabilities(
+                e.manifest.id,
+                snapshot.grantedCapabilities,
+              );
+            }
+            if (snapshot.enabled) {
+              get().setEnabled(e.manifest.id, true);
+            }
+          }
         }
-      },      uninstall: (id) =>
+      },
+      uninstall: (id) =>
         set((s) => {
           const plugins = s.plugins.filter((p) => p.id !== id);
           const builtinComponents = { ...s.builtinComponents };
@@ -379,17 +464,28 @@ export const usePluginStore = create<PluginState>()(
         }
         return { plugins: [] };
       },
-      // Persist only the data the user owns: enabled state + which
-      // manifests are installed. Component refs are non-serialisable
-      // and re-registered on every boot.
+      // Persist only the data the user owns: enabled state +
+      // which manifests are installed + the user's capability
+      // grants (the consent dialog must not re-prompt every boot).
+      // Component refs are non-serialisable and re-registered on
+      // every boot by the bootstrap.
       partialize: (s) => ({
-        plugins: s.plugins.map(({ id, enabled, version, pluginDir, manifest, loaderKind }) => ({
+        plugins: s.plugins.map(({
           id,
           enabled,
           version,
           pluginDir,
           manifest,
           loaderKind,
+          grantedCapabilities,
+        }) => ({
+          id,
+          enabled,
+          version,
+          pluginDir,
+          manifest,
+          loaderKind,
+          grantedCapabilities,
         })),
       }),
       // After hydration, re-derive contribution maps from the

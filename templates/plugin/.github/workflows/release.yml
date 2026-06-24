@@ -1,0 +1,83 @@
+# Reference GitHub Actions workflow for a Flux plugin repository.
+#
+# Triggered when an author pushes a `v*` tag (e.g. `v1.0.0`):
+#
+#   1. Build the plugin with `pnpm --filter @<scope>/plugin-<id> build`
+#      → produces `plugins/<id>/dist/index.js` + `dist/manifest.json`.
+#   2. Pack `manifest.json` + `dist/index.js` into `<plugin-id>-<version>.zip`.
+#   3. Compute the sha256 of the zip and write a sibling `.sha256` file.
+#   4. Create a GitHub Release for the tag and attach both artefacts.
+#
+# End users install via Settings → Community plugins → "Install from URL"
+# and paste the Release asset URL + sha256 from the release notes.
+#
+# Customise:
+#   * `PLUGIN_NAME` — must match `manifest.json::id`.
+#   * `PLUGIN_DIR`  — the workspace path containing your plugin.
+#   * `NODE_VERSION` / `PNPM_VERSION` — match your dev environment.
+
+name: Release plugin
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # required by softprops/action-gh-release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      PLUGIN_NAME: example
+      PLUGIN_DIR: plugins/example
+      NODE_VERSION: "20"
+      PNPM_VERSION: "9"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build plugin
+        run: pnpm --filter ./${{ env.PLUGIN_DIR }} build
+
+      - name: Derive version from tag
+        id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Package release artefact
+        working-directory: ${{ env.PLUGIN_DIR }}/dist
+        run: |
+          set -euo pipefail
+          ARTEFACT="${{ env.PLUGIN_NAME }}-${{ steps.version.outputs.value }}.zip"
+          # Only the two files the host actually needs.
+          zip -j "$ARTEFACT" manifest.json index.js
+          sha256sum "$ARTEFACT" | awk '{print $1}' > "$ARTEFACT.sha256"
+          echo "ARTEFACT=$ARTEFACT" >> "$GITHUB_ENV"
+          echo "ARTEFACT_PATH=$PWD/$ARTEFACT" >> "$GITHUB_ENV"
+          echo "ARTEFACT_SHA=$PWD/$ARTEFACT.sha256" >> "$GITHUB_ENV"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.ARTEFACT_PATH }}
+            ${{ env.ARTEFACT_SHA }}
+          body: |
+            Install via **Settings → Community plugins → Install from URL**.
+
+            **URL**: this release's `${{ env.ARTEFACT }}` asset.
+            **sha256**: see `${{ env.ARTEFACT }}.sha256` for the digest to paste into the verification field.

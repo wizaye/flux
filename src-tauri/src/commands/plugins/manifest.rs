@@ -43,6 +43,7 @@ pub const ALLOWED_CAPABILITIES: &[&str] = &[
     "vault.list",
     "workspace.notice",
     "workspace.open",
+    "workspace.reveal",
     "search.query",
     "plugin.storage.read",
     "plugin.storage.write",

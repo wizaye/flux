@@ -201,6 +201,7 @@ export const IcSync          = lc(Lucide.RefreshCw);
 export const IcSyncIgnored   = lc(Lucide.RefreshCwOff);
 export const IcMerge         = lc(Lucide.GitMerge);
 export const IcCheck         = lc(Lucide.Check);
+export const IcChecklist     = lc(Lucide.ListChecks);
 export const IcFileSubmodule = lc(Lucide.FolderGit);
 
 // ─── VCS / BYOC ──────────────────────────────────────────────────────

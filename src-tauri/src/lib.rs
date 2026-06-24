@@ -2,6 +2,7 @@
 pub mod commands;
 pub mod db;
 pub mod state;
+pub mod sweep;
 pub mod types;
 pub mod watcher;
 
@@ -57,8 +58,13 @@ pub fn run() {
             commands::plugins::scan_plugins,
             commands::plugins::install_plugin_from_folder,
             commands::plugins::install_plugin_from_zip,
+            commands::plugins::install_plugin_from_bytes,
             commands::plugins::uninstall_plugin,
             commands::plugins::plugin_backend_call,
+            // Tasks (Markdown checkboxes — feature §5)
+            commands::fs::tasks::list_open_tasks_cmd,
+            commands::fs::tasks::list_tasks_for_file_cmd,
+            commands::fs::tasks::toggle_task_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -81,6 +81,15 @@ function copyManifestPlugin(): Plugin {
 }
 
 export function pluginViteConfig(opts: PluginBuildOptions): UserConfig {
+  // Sourcemaps are a ~2× multiplier on `dist/` size (Excalidraw's
+  // 8 MB bundle ships a 17 MB `.js.map`). They're only useful when
+  // a developer is debugging the built artefact — for production
+  // releases and CI we omit them. Override per plugin via
+  // `PLUGIN_SOURCEMAP=true pnpm --filter … build`.
+  const sourcemap =
+    process.env.PLUGIN_SOURCEMAP === "true" ||
+    process.env.NODE_ENV !== "production";
+
   return {
     plugins: [react(), copyManifestPlugin()],
     build: {
@@ -91,17 +100,19 @@ export function pluginViteConfig(opts: PluginBuildOptions): UserConfig {
         formats: ["es"],
         fileName: () => "index.js",
       },
-      sourcemap: true,
+      sourcemap,
       // Don't wipe the entire dist between plugin tests / dev
       // builds; only the entry artefact changes.
       emptyOutDir: true,
       rollupOptions: {
         external: [...DEFAULT_EXTERNALS, ...(opts.extraExternals ?? [])],
-        // Disable code-splitting so each plugin ships as a single
-        // file. Plugins with large asset trees can opt out by
-        // overriding rollupOptions in their own vite.config.ts.
+        // Allow code-splitting so plugins can React.lazy heavy
+        // surfaces (e.g. Excalidraw's ~2.5 MB editor). The entry
+        // stays at `dist/index.js` to match the manifest's
+        // `bundleUrl`; async chunks land under `dist/chunks/`.
         output: {
-          codeSplitting: false,
+          chunkFileNames: "chunks/[name]-[hash].js",
+          assetFileNames: "assets/[name]-[hash][extname]",
         },
       },
     },

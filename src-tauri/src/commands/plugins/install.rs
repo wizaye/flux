@@ -68,6 +68,42 @@ pub fn install_from_zip(zip_path: &Path, state: &AppState) -> Result<InstallResu
     finalise_install(staging, state)
 }
 
+/// Install a plugin from an in-memory byte buffer. Used by the
+/// marketplace install flow — the frontend downloads a zip from
+/// a registry URL, optionally verifies its sha256 against an
+/// `expected_sha256` digest using WebCrypto, then hands the bytes
+/// here.
+///
+/// The host doesn't compute sha256 itself (we'd need to add the
+/// `sha2` crate). The frontend SHOULD verify the digest before
+/// calling this; if the user pasted a raw URL with no checksum,
+/// this command still works — they are explicitly trusting the
+/// URL they pasted, the same as `install_from_folder`.
+pub fn install_from_bytes(
+    bytes: &[u8],
+    state: &AppState,
+) -> Result<InstallResult, AppError> {
+    if bytes.len() as u64 > MAX_ZIP_BYTES {
+        return Err(AppError::Other(format!(
+            "plugin zip too large ({} > {} bytes)",
+            bytes.len(),
+            MAX_ZIP_BYTES
+        )));
+    }
+    // Stage the bytes into a temp `.zip` so `install_from_zip` can
+    // open it via the standard zip reader. The temp file lives
+    // inside the vault's plugins-staging dir; we clean up after
+    // the install attempt regardless of outcome.
+    let vault = get_vault_path(state)?;
+    let tmp_root = vault.join(".zenvault").join("plugins-staging");
+    fs::create_dir_all(&tmp_root)?;
+    let tmp = tmp_root.join(format!("{}.zip", uuid::Uuid::new_v4().simple()));
+    fs::write(&tmp, bytes)?;
+    let result = install_from_zip(&tmp, state);
+    let _ = fs::remove_file(&tmp);
+    result
+}
+
 /// Remove a plugin from disk + wipe its scoped storage rows.
 pub fn uninstall(id: &str, state: &AppState) -> Result<(), AppError> {
     let vault = get_vault_path(state)?;

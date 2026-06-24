@@ -425,6 +425,19 @@ export async function installPluginFromZip(
   return await invoke('install_plugin_from_zip', { zipPath });
 }
 
+/** Install a plugin from raw zip bytes. The frontend marketplace
+ *  flow uses this after downloading + verifying a tarball from the
+ *  community registry. */
+export async function installPluginFromBytes(
+  bytes: Uint8Array,
+): Promise<InstallResult> {
+  // Tauri's invoke marshals byte arrays as numeric arrays. Convert
+  // once so the IPC payload stays predictable across platforms.
+  return await invoke('install_plugin_from_bytes', {
+    bytes: Array.from(bytes),
+  });
+}
+
 /** Remove a plugin from disk and wipe its scoped storage. */
 export async function uninstallPlugin(id: string): Promise<void> {
   return await invoke('uninstall_plugin', { id });
@@ -437,4 +450,42 @@ export async function pluginBackendCall(
   req: PluginBackendRequest,
 ): Promise<PluginBackendResponse> {
   return await invoke('plugin_backend_call', { req });
+}
+
+// ── Tasks (Markdown checkboxes — feature §5) ─────────────────────────────
+
+export type TaskStatus = 'open' | 'done';
+
+export interface TaskDto {
+  id: string;
+  fileId: string;
+  blockAnchor: string | null;
+  lineHint: number;
+  status: TaskStatus;
+  rawText: string;
+  indexedAt: number;
+}
+
+export interface ToggleTaskResult {
+  taskId: string;
+  newStatus: TaskStatus;
+  newAnchor: string | null;
+  line: number;
+}
+
+/** Every open task across the vault. `limit` defaults to 500 on
+ *  the Rust side, capped at 5000. The Tasks pane reads this. */
+export async function listOpenTasks(limit?: number): Promise<TaskDto[]> {
+  return await invoke('list_open_tasks_cmd', { limit });
+}
+
+/** Every task (open + done) in one file. */
+export async function listTasksForFile(fileId: string): Promise<TaskDto[]> {
+  return await invoke('list_tasks_for_file_cmd', { fileId });
+}
+
+/** Flip a task's `[ ]` ↔ `[x]` state. Rust rewrites the source
+ *  file atomically and reindexes the affected file. */
+export async function toggleTask(taskId: string): Promise<ToggleTaskResult> {
+  return await invoke('toggle_task_cmd', { taskId });
 }

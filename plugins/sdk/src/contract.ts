@@ -44,6 +44,7 @@ export const CAPABILITIES = {
   VAULT_WRITE: "vault.write",
   VAULT_LIST: "vault.list",
   WORKSPACE_OPEN: "workspace.open",
+  WORKSPACE_REVEAL: "workspace.reveal",
   WORKSPACE_NOTICE: "workspace.notice",
   SEARCH_QUERY: "search.query",
   PLUGIN_STORAGE_READ: "plugin.storage.read",

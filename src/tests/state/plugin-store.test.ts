@@ -280,6 +280,11 @@ describe("persist middleware — partialize", () => {
           pluginDir: "",
           manifest: expect.any(Object),
           loaderKind: "builtin",
+          // Built-ins auto-grant the full declared capability set.
+          // The fixture manifest has none, so this is an empty
+          // array (distinct from `null`, which means "not yet
+          // prompted").
+          grantedCapabilities: [],
         },
       ],
     });

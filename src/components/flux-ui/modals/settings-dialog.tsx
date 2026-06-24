@@ -61,6 +61,8 @@ import {
   installFromZip as installPluginFromZip,
   uninstall as uninstallPluginToDisk,
 } from "@/plugins/install";
+import { CapabilityConsentDialog } from "@/components/flux-ui/modals/capability-consent-dialog";
+import { installFromUrl as installPluginFromUrl } from "@/plugins/marketplace";
 import { toast } from "sonner";
 import {
   IcArchive,
@@ -372,7 +374,40 @@ function SectionBody({ section }: { section: Section }) {
 function CommunityPluginsBody() {
   const plugins = usePluginStore((s) => s.plugins);
   const setEnabled = usePluginStore((s) => s.setEnabled);
+  const grantCapabilities = usePluginStore((s) => s.grantCapabilities);
   const [busy, setBusy] = React.useState(false);
+  const [urlInput, setUrlInput] = React.useState("");
+  const [sha256Input, setSha256Input] = React.useState("");
+  /** Plugin id whose consent dialog is open, or null. */
+  const [consentingId, setConsentingId] = React.useState<string | null>(null);
+  const consentingPlugin = React.useMemo(
+    () => plugins.find((p) => p.id === consentingId) ?? null,
+    [plugins, consentingId],
+  );
+
+  const handleToggle = React.useCallback(
+    (id: string, next: boolean) => {
+      // Disable is always allowed; enable on an external plugin
+      // that has never been consented to opens the consent dialog
+      // instead of flipping the bit. Once the user clicks Allow,
+      // grantCapabilities + setEnabled fire together.
+      if (!next) {
+        setEnabled(id, false);
+        return;
+      }
+      const target = plugins.find((p) => p.id === id);
+      if (!target) return;
+      if (
+        target.loaderKind === "external" &&
+        target.grantedCapabilities === null
+      ) {
+        setConsentingId(id);
+        return;
+      }
+      setEnabled(id, true);
+    },
+    [plugins, setEnabled],
+  );
 
   const handleInstallFromFolder = React.useCallback(async () => {
     if (busy) return;
@@ -431,6 +466,30 @@ function CommunityPluginsBody() {
     }
   }, []);
 
+  const handleInstallFromUrl = React.useCallback(async () => {
+    const url = urlInput.trim();
+    if (!url || busy) return;
+    const checksum = sha256Input.trim();
+    setBusy(true);
+    try {
+      const result = await installPluginFromUrl(url, {
+        expectedSha256: checksum.length > 0 ? checksum : undefined,
+      });
+      toast.success(
+        `${result.replaced ? "Updated" : "Installed"} ${result.manifest.name}`,
+        { description: `v${result.manifest.version} · ${result.manifest.id}` },
+      );
+      setUrlInput("");
+      setSha256Input("");
+    } catch (e) {
+      toast.error("Plugin install from URL failed", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setBusy(false);
+    }
+  }, [urlInput, sha256Input, busy]);
+
   return (
     <div>
       <SectionTitle>Installed plugins</SectionTitle>
@@ -458,7 +517,7 @@ function CommunityPluginsBody() {
               <div className="flex items-center gap-3">
                 <Switch
                   checked={p.enabled}
-                  onCheckedChange={(v) => setEnabled(p.id, v === true)}
+                  onCheckedChange={(v) => handleToggle(p.id, v === true)}
                 />
                 {p.loaderKind === "external" && (
                   <button
@@ -503,13 +562,54 @@ function CommunityPluginsBody() {
 
       <SectionTitle>Browse community plugins</SectionTitle>
       <Row
+        title="Install from URL"
+        description="Paste a direct .zip URL — e.g. a GitHub Release asset. Optionally paste the sha256 from the release notes to verify the download before install."
+      >
+        <div className="flex flex-col gap-1.5 items-end min-w-[280px]">
+          <Input
+            value={urlInput}
+            onChange={(e) => setUrlInput(e.target.value)}
+            placeholder="https://github.com/<owner>/<repo>/releases/download/v1/plugin.zip"
+            className="text-[11px]"
+            disabled={busy}
+          />
+          <Input
+            value={sha256Input}
+            onChange={(e) => setSha256Input(e.target.value)}
+            placeholder="sha256 (optional)"
+            className="text-[11px] font-mono"
+            disabled={busy}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy || urlInput.trim().length === 0}
+            onClick={handleInstallFromUrl}
+          >
+            Install
+          </Button>
+        </div>
+      </Row>
+      <Row
         title="Plugin registry"
-        description="Coming soon — install third-party plugins from a public registry."
+        description="Coming soon — install third-party plugins from a curated registry."
       >
         <Button variant="outline" disabled>
           Browse
         </Button>
       </Row>
+
+      <CapabilityConsentDialog
+        open={consentingPlugin !== null}
+        manifest={consentingPlugin?.manifest ?? null}
+        onCancel={() => setConsentingId(null)}
+        onApprove={(caps) => {
+          if (!consentingId) return;
+          grantCapabilities(consentingId, caps);
+          setEnabled(consentingId, true);
+          setConsentingId(null);
+        }}
+      />
     </div>
   );
 }

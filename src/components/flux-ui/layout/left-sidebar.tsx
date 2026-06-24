@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { BookmarksList } from "@/components/flux-ui/common/bookmarks-list";
 import { VaultSearchPanel } from "@/components/flux-ui/common/vault-search-panel";
 import { CalendarPanel } from "@/components/flux-ui/common/calendar-panel";
+import { TasksPanel } from "@/components/flux-ui/common/tasks-panel";
 import { IconButton } from "@/components/flux-ui/common/icon-button";
 import { useFileOperations } from "@/hooks/use-file-operations";
 import { useDirectoryOperations } from "@/hooks/use-directory-operations";
@@ -478,8 +479,11 @@ function Body({
         </ScrollArea>
       );
     }
-    // External plugin (Phase C) — fall back to a placeholder until
-    // the lazy-import path lands.
+    // Component refs hydrate asynchronously when a plugin is
+    // enabled for the first time (`registerBuiltinLazy` /
+    // `registerExternalLazy` kick off the dynamic import). Show a
+    // neutral spinner-equivalent until the panel ref lands so the
+    // sidebar doesn't flash empty.
     return (
       <div className="flex-1 flex items-center justify-center text-[12px] text-[var(--text-faint)]">
         Loading plugin…
@@ -517,6 +521,7 @@ function Body({
         )}
         {view === "search" && <VaultSearchPanel />}
         {view === "bookmarks" && <BookmarksList />}
+        {view === "tasks" && <TasksPanel />}
         {view === "changes" && (
           <SidebarEmpty
             Icon={IcRefresh}
