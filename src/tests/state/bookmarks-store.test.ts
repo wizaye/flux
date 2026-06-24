@@ -7,7 +7,7 @@
  */
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { useBookmarksStore } from "@/state/bookmarks-store";
+import { selectBookmarksByGroup, useBookmarksStore } from "@/state/bookmarks-store";
 import { useVaultStore } from "@/state/vault-store";
 
 const VAULT = "/tmp/test-vault";
@@ -160,5 +160,47 @@ describe("persistence", () => {
     });
     useBookmarksStore.getState().reload();
     expect(useBookmarksStore.getState().has("/foo.md")).toBe(true);
+  });
+});
+
+describe("selectBookmarksByGroup", () => {
+  it("empty store returns a single empty Untitled bucket", () => {
+    const groups = selectBookmarksByGroup({ entries: [], groups: [] });
+    expect(groups).toEqual([{ name: "", entries: [] }]);
+  });
+
+  it("groups entries by their `group` field, ordering by store.groups", () => {
+    useBookmarksStore.getState().addGroup("Inbox");
+    useBookmarksStore.getState().addGroup("Reading");
+    useBookmarksStore.getState().upsert({ id: "/a.md", group: "Reading" });
+    useBookmarksStore.getState().upsert({ id: "/b.md", group: "Inbox" });
+    useBookmarksStore.getState().upsert({ id: "/c.md" }); // untitled
+
+    const groups = selectBookmarksByGroup(useBookmarksStore.getState());
+    expect(groups.map((g) => g.name)).toEqual(["Inbox", "Reading", ""]);
+    expect(groups[0].entries.map((e) => e.id)).toEqual(["/b.md"]);
+    expect(groups[1].entries.map((e) => e.id)).toEqual(["/a.md"]);
+    expect(groups[2].entries.map((e) => e.id)).toEqual(["/c.md"]);
+  });
+
+  it("includes entries pointing at a group that was never registered (orphans)", () => {
+    useBookmarksStore.getState().upsert({ id: "/x.md", group: "Ghost" });
+    const groups = selectBookmarksByGroup(useBookmarksStore.getState());
+    const ghost = groups.find((g) => g.name === "Ghost");
+    expect(ghost?.entries).toHaveLength(1);
+  });
+});
+
+describe("legacy migration corner cases", () => {
+  it("ignores garbage / non-array / non-object stored values", () => {
+    const key = "flux.bookmarks." + encodeURIComponent(VAULT);
+    localStorage.setItem(key, "not-json");
+    useBookmarksStore.getState().reload();
+    expect(useBookmarksStore.getState().entries).toEqual([]);
+    expect(useBookmarksStore.getState().groups).toEqual([]);
+
+    localStorage.setItem(key, JSON.stringify({ unexpected: "shape" }));
+    useBookmarksStore.getState().reload();
+    expect(useBookmarksStore.getState().entries).toEqual([]);
   });
 });

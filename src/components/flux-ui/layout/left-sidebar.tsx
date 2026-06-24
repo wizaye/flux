@@ -498,15 +498,21 @@ function Body({
       <div className="flex flex-col py-0.5">
         {view === "files" && (
           vaultTree
-            ? <VaultTree 
-                nodes={vaultTree} 
-                depth={0} 
-                onOpenFile={onOpenFile}
-                inlineEdit={inlineEdit}
-                setInlineEdit={setInlineEdit}
-                onInlineSubmit={onInlineSubmit}
-                onInlineCancel={onInlineCancel}
-              />
+            ? (vaultTree.length === 0 && !inlineEdit
+                ? <SidebarEmpty
+                    Icon={IcNewFile}
+                    title="This vault is empty"
+                    description="Use the new-file or new-folder icon in the toolbar above to start writing."
+                  />
+                : <VaultTree
+                    nodes={vaultTree}
+                    depth={0}
+                    onOpenFile={onOpenFile}
+                    inlineEdit={inlineEdit}
+                    setInlineEdit={setInlineEdit}
+                    onInlineSubmit={onInlineSubmit}
+                    onInlineCancel={onInlineCancel}
+                  />)
             : <StubList items={["Welcome.md", "Inbox.md", "Daily/", "Projects/"]} />
         )}
         {view === "search" && <VaultSearchPanel />}

@@ -76,6 +76,51 @@ async fn get_vault_info_reflects_open_state() {
 }
 
 #[tokio::test]
+async fn get_vault_info_returns_stable_opened_at_across_calls() {
+    // Regression: previously each `get_vault_info` call regenerated
+    // `opened_at` with `Utc::now()`, so the frontend status pill
+    // ("vault opened X ago") would reset every refresh. The marker
+    // is now stored in AppState at open time.
+    let dir = tempdir().unwrap();
+    let path_str = dir
+        .path()
+        .join("stable-time")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let state = fresh_state();
+    let handle = create_vault_impl(path_str, &state).await.unwrap();
+    let first = get_vault_info_impl(&state).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let second = get_vault_info_impl(&state).await.unwrap();
+
+    assert_eq!(handle.opened_at, first.opened_at);
+    assert_eq!(first.opened_at, second.opened_at);
+}
+
+#[tokio::test]
+async fn close_clears_opened_at_marker_so_a_subsequent_open_is_fresh() {
+    let dir = tempdir().unwrap();
+    let path_str = dir
+        .path()
+        .join("reopen-time")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let state = fresh_state();
+    let first = create_vault_impl(path_str.clone(), &state).await.unwrap();
+    close_vault_impl(&state).await.unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let second = open_vault_impl(path_str, &state).await.unwrap();
+    assert!(
+        second.opened_at >= first.opened_at,
+        "reopen timestamp ({}) must be >= original ({})",
+        second.opened_at,
+        first.opened_at,
+    );
+}
+
+#[tokio::test]
 async fn reopen_same_vault_replaces_state() {
     let dir = tempdir().unwrap();
     let vault_path = dir.path().join("test-vault");

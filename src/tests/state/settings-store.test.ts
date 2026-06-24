@@ -290,3 +290,111 @@ describe("useSettingsStore — hotkey management", () => {
     expect(useSettingsStore.getState().hotkeys).toEqual(DEFAULT_HOTKEYS);
   });
 });
+
+describe("useSettingsStore — appearance & layout setters", () => {
+  it("setFontSize", () => {
+    useSettingsStore.getState().setFontSize(20);
+    expect(useSettingsStore.getState().fontSize).toBe(20);
+  });
+
+  it("setDefaultViewMode", () => {
+    useSettingsStore.getState().setDefaultViewMode("source");
+    expect(useSettingsStore.getState().defaultViewMode).toBe("source");
+    useSettingsStore.getState().setDefaultViewMode("preview");
+    expect(useSettingsStore.getState().defaultViewMode).toBe("preview");
+  });
+
+  it("setTheme cycles light/dark/system", () => {
+    useSettingsStore.getState().setTheme("dark");
+    expect(useSettingsStore.getState().theme).toBe("dark");
+    useSettingsStore.getState().setTheme("light");
+    expect(useSettingsStore.getState().theme).toBe("light");
+    useSettingsStore.getState().setTheme("system");
+    expect(useSettingsStore.getState().theme).toBe("system");
+  });
+
+  it("setShowRibbon / setShowTabBar", () => {
+    useSettingsStore.getState().setShowRibbon(false);
+    useSettingsStore.getState().setShowTabBar(false);
+    expect(useSettingsStore.getState().showRibbon).toBe(false);
+    expect(useSettingsStore.getState().showTabBar).toBe(false);
+  });
+
+  it("setSkipMergeConfirm", () => {
+    useSettingsStore.getState().setSkipMergeConfirm(true);
+    expect(useSettingsStore.getState().skipMergeConfirm).toBe(true);
+  });
+});
+describe("persist middleware — migrate", () => {
+  it("drops the stale toggleVimMode binding on v2 \u2192 v3 upgrade", () => {
+    const persisted = {
+      hotkeys: {
+        ...DEFAULT_HOTKEYS,
+        toggleVimMode: makeBinding("F8"),
+      },
+      lineNumbers: false,
+    };
+    const migrated = useSettingsStore.persist
+      .getOptions()
+      .migrate?.(persisted, 2) as { hotkeys: Record<string, unknown> };
+    expect(migrated.hotkeys).not.toHaveProperty("toggleVimMode");
+  });
+
+  it("passes a v3+ persisted state through unchanged", () => {
+    const persisted = { hotkeys: { ...DEFAULT_HOTKEYS } };
+    const migrated = useSettingsStore.persist
+      .getOptions()
+      .migrate?.(persisted, 3);
+    expect(migrated).toEqual(persisted);
+  });
+
+  it("returns an empty object when persisted state is null", () => {
+    const migrated = useSettingsStore.persist
+      .getOptions()
+      .migrate?.(null, 0);
+    expect(migrated).toEqual({});
+  });
+});
+
+describe("persist middleware — merge fills missing hotkeys with defaults", () => {
+  it("synthesises any missing hotkey field from DEFAULT_HOTKEYS", () => {
+    const merge = useSettingsStore.persist.getOptions().merge!;
+    const persisted = {
+      hotkeys: {
+        commandPalette: makeBinding("p", { metaKey: true }),
+        // every other binding intentionally absent
+      },
+    };
+    const merged = merge(persisted, useSettingsStore.getState()) as {
+      hotkeys: Record<string, unknown>;
+    };
+    // Persisted value preserved.
+    expect(merged.hotkeys.commandPalette).toEqual(
+      makeBinding("p", { metaKey: true }),
+    );
+    // Missing one filled from defaults.
+    expect(merged.hotkeys.openSettings).toEqual(DEFAULT_HOTKEYS.openSettings);
+  });
+
+  it("tolerates a null persisted blob", () => {
+    const merge = useSettingsStore.persist.getOptions().merge!;
+    const merged = merge(null, useSettingsStore.getState()) as {
+      hotkeys: Record<string, unknown>;
+    };
+    expect(merged.hotkeys).toEqual(DEFAULT_HOTKEYS);
+  });
+});
+describe("branch coverage gaps", () => {
+  it("matchesBinding returns false when key is not a string (defensive guard)", () => {
+    const fakeEvent = {
+      key: "a",
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+    } as KeyboardEvent;
+    // Pass a malformed binding where `key` isn't a string.
+    const malformed = { key: 42, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false } as unknown as Parameters<typeof matchesBinding>[1];
+    expect(matchesBinding(fakeEvent, malformed)).toBe(false);
+  });
+});

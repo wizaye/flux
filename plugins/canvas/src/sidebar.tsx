@@ -15,9 +15,8 @@ import {
   Search,
 } from "lucide-react";
 
-import { useVaultStore } from "@/state/vault-store";
-import { useFileOperations } from "@/hooks/use-file-operations";
-import { useVaultOperations } from "@/hooks/use-vault-operations";
+import { useVaultStore, useFileOperations, useVaultOperations } from "@flux/plugin-sdk/bridge";
+import type { FileNode } from "@flux/plugin-sdk/bridge";
 
 import {
   AlertDialog,
@@ -28,26 +27,20 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
-import {
+  Button,
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-
-import type { FileNode } from "@/state/editor";
+  Input,
+} from "@flux/plugin-sdk/ui";
 
 import { emptyCanvasDoc, serializeCanvas } from "./state";
 

@@ -1,0 +1,25 @@
+# Toolchain pin for the Flux workspace.
+#
+# rustup reads this file on every `cargo` / `rustc` invocation and
+# auto-installs the pinned toolchain *plus* every listed component
+# the first time it runs. This eliminates the manual
+# `rustup component add llvm-tools-preview` step from the
+# coverage-tooling setup — new contributors get the right toolchain
+# on their first `cargo check` without thinking about it.
+#
+# Components:
+#   • rustfmt           — required for `cargo fmt` (CI gate).
+#   • clippy            — required for `cargo clippy` (CI gate).
+#   • llvm-tools-preview — ships the `llvm-cov` + `llvm-profdata`
+#     binaries that `cargo-llvm-cov` shells out to. Without this,
+#     coverage runs fail with "no such command: llvm-cov".
+#
+# `cargo-llvm-cov` itself is a *cargo subcommand binary* (lives in
+# $CARGO_HOME/bin), not a Rust dependency — it can't be declared in
+# Cargo.toml. Install it via `pnpm test:setup:backend` once per
+# machine; the script uses `cargo-binstall` for a prebuilt download
+# and falls back to `cargo install` if binstall isn't available.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
+profile = "minimal"

@@ -1,0 +1,25 @@
+{
+  "id": "example",
+  "name": "Example Plugin",
+  "version": "0.1.0",
+  "author": "Your Name",
+  "description": "A hello-world plugin generated from the Flux plugin template.",
+  "minAppVersion": "0.1.0",
+  "apiVersion": "1.0",
+  "capabilities": {
+    "required": [],
+    "optional": ["workspace.notice"]
+  },
+  "contributes": {
+    "activityBarItem": {
+      "id": "example",
+      "iconUrl": "lucide:sparkles",
+      "tooltip": "Example",
+      "placement": "left"
+    },
+    "settingsPanel": {
+      "label": "Example",
+      "bundleUrl": "dist/index.js"
+    }
+  }
+}

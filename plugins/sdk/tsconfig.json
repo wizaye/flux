@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.plugin-base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx"
+  },
+  "include": ["src/**/*"]
+}

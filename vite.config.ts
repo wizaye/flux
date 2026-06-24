@@ -34,6 +34,14 @@ export default defineConfig(async () => ({
         replacement: resolve(__dirname, "plugins/sdk/src/host.ts"),
       },
       {
+        find: /^@flux\/plugin-sdk\/contract$/,
+        replacement: resolve(__dirname, "plugins/sdk/src/contract.ts"),
+      },
+      {
+        find: /^@flux\/plugin-sdk\/bridge$/,
+        replacement: resolve(__dirname, "plugins/sdk/src/bridge.ts"),
+      },
+      {
         find: /^@flux\/plugin-sdk\/types$/,
         replacement: resolve(__dirname, "plugins/sdk/src/types.ts"),
       },
@@ -42,8 +50,16 @@ export default defineConfig(async () => ({
         replacement: resolve(__dirname, "plugins/sdk/src/index.ts"),
       },
       {
+        find: /^@flux\/plugin-kanban\/manifest$/,
+        replacement: resolve(__dirname, "plugins/kanban/manifest.json"),
+      },
+      {
         find: /^@flux\/plugin-kanban$/,
         replacement: resolve(__dirname, "plugins/kanban/src/index.ts"),
+      },
+      {
+        find: /^@flux\/plugin-canvas\/manifest$/,
+        replacement: resolve(__dirname, "plugins/canvas/manifest.json"),
       },
       {
         find: /^@flux\/plugin-canvas$/,
@@ -61,12 +77,9 @@ export default defineConfig(async () => ({
     include: [
       "mermaid",
       "markdown-it",
-      "markdown-it-texmath",
-      "katex",
       "reveal.js",
       "force-graph",
       "pdfjs-dist",
-      "highlight.js",
     ],
   },
 

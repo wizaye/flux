@@ -53,6 +53,12 @@ pub fn run() {
             commands::links::scan_vault_links_subset,
             // Export
             commands::export::export_markdown_to_pdf,
+            // Plugins
+            commands::plugins::scan_plugins,
+            commands::plugins::install_plugin_from_folder,
+            commands::plugins::install_plugin_from_zip,
+            commands::plugins::uninstall_plugin,
+            commands::plugins::plugin_backend_call,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

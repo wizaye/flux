@@ -33,11 +33,28 @@ export function useFsWatcherSync() {
       const off = await listen<FsChangedPayload>(
         "flux://fs-changed",
         (event) => {
-          const { fileTree } = useVaultStore.getState();
+          const { fileTree, openFiles, dirtyFiles, removeFileContent } =
+            useVaultStore.getState();
           const currentPaths = flattenVault(fileTree);
 
           const hasRemoved = event.payload.removed.some((p) => currentPaths.has(p));
           const hasNew = event.payload.changed.some((p) => !currentPaths.has(p));
+
+          // Drop cached buffers for files that were modified
+          // externally so the next open re-reads from disk. We skip
+          // dirty files — their in-memory copy is the user's
+          // unsaved work and stomping it would lose data. Same for
+          // files that were just deleted (`removed` paths): the
+          // open-tab handler will close their tabs separately.
+          const stalePaths = [
+            ...event.payload.changed.filter(
+              (p) => openFiles.has(p) && !dirtyFiles.has(p),
+            ),
+            ...event.payload.removed.filter((p) => openFiles.has(p)),
+          ];
+          for (const path of stalePaths) {
+            removeFileContent(path);
+          }
 
           if (!hasRemoved && !hasNew) {
             // Content modification of existing files only - skip full vault tree rebuild

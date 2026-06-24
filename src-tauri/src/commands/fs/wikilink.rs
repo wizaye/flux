@@ -212,10 +212,10 @@ where
 }
 
 pub fn is_ignored(name: &str) -> bool {
-    matches!(
-        name,
-        ".zenvault" | ".git" | "node_modules" | ".trash" | ".archive" | ".DS_Store" | "Thumbs.db"
-    ) || (name.starts_with('.') && name.len() > 1)
+    // Wikilink-heal walks markdown files; the policy of what to
+    // skip lives in [`paths::is_ignored_in_wikilink`] so it stays
+    // in sync with watcher / tree-walk semantics.
+    super::paths::is_ignored_in_wikilink(name)
 }
 
 /// Atomic write: temp in same dir → fsync → rename. Matches the

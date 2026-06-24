@@ -10,33 +10,27 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 
+pub mod last_vault;
+
 // ── Last-opened vault persistence ───────────────────────────────────
 //
-// We persist the last successfully opened vault path to
-// `<app_config_dir>/last-vault.txt` so the next launch can auto-reopen
-// without forcing the vault picker every time. The file is a single
-// UTF-8 path, no JSON / TOML wrapping — KISS.
+// AppHandle-based wrappers around the pure helpers in
+// [`last_vault`]. We keep the wrappers tiny so the testable surface
+// stays inside the pure module.
 
-fn last_vault_file(app: &AppHandle) -> Option<PathBuf> {
-    app.path()
-        .app_config_dir()
-        .ok()
-        .map(|p| p.join("last-vault.txt"))
+fn config_dir(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok()
 }
 
 fn remember_last_vault(app: &AppHandle, path: &str) {
-    let Some(file) = last_vault_file(app) else { return; };
-    if let Some(parent) = file.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Err(e) = std::fs::write(&file, path) {
-        tracing::warn!("Failed to persist last-vault path: {e}");
+    if let Some(dir) = config_dir(app) {
+        last_vault::write_last_vault(&dir, path);
     }
 }
 
 fn forget_last_vault(app: &AppHandle) {
-    if let Some(file) = last_vault_file(app) {
-        let _ = std::fs::remove_file(file);
+    if let Some(dir) = config_dir(app) {
+        last_vault::forget_last_vault(&dir);
     }
 }
 
@@ -47,29 +41,7 @@ fn forget_last_vault(app: &AppHandle) {
 /// instead of showing the vault picker.
 #[tauri::command]
 pub async fn get_last_vault_path(app: AppHandle) -> Result<Option<String>, AppError> {
-    let Some(file) = last_vault_file(&app) else {
-        return Ok(None);
-    };
-    match std::fs::read_to_string(&file) {
-        Ok(s) => {
-            let trimmed = s.trim().to_string();
-            if trimmed.is_empty() {
-                Ok(None)
-            } else if !std::path::Path::new(&trimmed).exists() {
-                // Stale pointer — clean it up so the next launch
-                // doesn't keep trying a moved/deleted folder.
-                forget_last_vault(&app);
-                Ok(None)
-            } else {
-                Ok(Some(trimmed))
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => {
-            tracing::warn!("Failed to read last-vault file: {e}");
-            Ok(None)
-        }
-    }
+    Ok(config_dir(&app).and_then(|d| last_vault::read_last_vault(&d)))
 }
 
 /// Open an existing vault or create it if it doesn't exist.
@@ -153,12 +125,16 @@ pub async fn open_vault_impl(
     .map_err(|e| AppError::Database(e.to_string()))?;
 
     // Store vault path and pool in state
+    let opened_at = chrono::Utc::now().timestamp_millis();
     {
         let mut vault_path_lock = state.vault_path.lock().unwrap();
         *vault_path_lock = Some(path.clone());
 
         let mut pool_lock = state.db_pool.lock().unwrap();
         *pool_lock = Some(pool);
+
+        let mut opened_lock = state.vault_opened_at.lock().unwrap();
+        *opened_lock = Some(opened_at);
     }
 
     // Get vault name from path
@@ -167,9 +143,6 @@ pub async fn open_vault_impl(
         .and_then(|n| n.to_str())
         .unwrap_or("Unnamed Vault")
         .to_string();
-
-    // Get current timestamp
-    let opened_at = chrono::Utc::now().timestamp_millis();
 
     Ok(VaultHandle {
         path,
@@ -249,6 +222,14 @@ pub async fn close_vault_impl(state: &Arc<AppState>) -> Result<(), AppError> {
         *vault_path = None;
     }
 
+    // Clear the opened-at marker so a subsequent `get_vault_info`
+    // call (which is only valid when a vault is open) can't see a
+    // stale timestamp from the previous session.
+    {
+        let mut opened = state.vault_opened_at.lock().unwrap();
+        *opened = None;
+    }
+
     Ok(())
 }
 
@@ -287,7 +268,17 @@ pub async fn get_vault_info_impl(state: &Arc<AppState>) -> Result<VaultHandle, A
         .unwrap_or("Unnamed Vault")
         .to_string();
 
-    let opened_at = chrono::Utc::now().timestamp_millis();
+    // Return the stable open-session timestamp. Falling back to
+    // `now()` only happens in the bizarre case where the pool exists
+    // but the marker wasn't set — in practice every code path that
+    // populates `db_pool` also populates `vault_opened_at`, so this
+    // is defensive belt-and-suspenders, not a behaviour we expect to
+    // hit.
+    let opened_at = state
+        .vault_opened_at
+        .lock()
+        .unwrap()
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
 
     Ok(VaultHandle {
         path,

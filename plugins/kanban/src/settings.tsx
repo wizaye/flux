@@ -10,7 +10,7 @@
  */
 import * as React from "react";
 
-import { Textarea } from "@/components/ui/textarea";
+import { Textarea } from "@flux/plugin-sdk/ui";
 import { createPluginHost } from "@flux/plugin-sdk/host";
 
 const host = createPluginHost({ pluginId: "kanban", apiVersion: "1.0" });

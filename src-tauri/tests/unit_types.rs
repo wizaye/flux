@@ -11,6 +11,28 @@ fn file_state_as_str_returns_lowercase_string() {
 }
 
 #[test]
+fn file_state_from_db_str_round_trips_every_variant() {
+    for variant in [FileState::Active, FileState::Archived, FileState::Trashed] {
+        assert_eq!(
+            FileState::from_db_str(variant.as_str()),
+            variant,
+            "round-trip failed for {:?}",
+            variant,
+        );
+    }
+}
+
+#[test]
+fn file_state_from_db_str_defaults_unknown_to_active() {
+    // Forward-compat: unknown / corrupted state strings must NOT
+    // hide the row — a future variant rolling back to this build
+    // should still show the file in the user's vault.
+    assert_eq!(FileState::from_db_str(""), FileState::Active);
+    assert_eq!(FileState::from_db_str("future-state"), FileState::Active);
+    assert_eq!(FileState::from_db_str("ACTIVE"), FileState::Active);
+}
+
+#[test]
 fn app_error_from_std_io_error() {
     // 1. NotFound -> AppError::NotFound
     let err_not_found = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");

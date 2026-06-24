@@ -13,7 +13,10 @@
     "test:coverage": "vitest run --coverage",
     "test:ui": "vitest --ui",
     "test:backend": "cargo test --manifest-path src-tauri/Cargo.toml",
-    "test:coverage:backend": "LLVM_COV=/Library/Developer/CommandLineTools/usr/bin/llvm-cov LLVM_PROFDATA=/Library/Developer/CommandLineTools/usr/bin/llvm-profdata cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html --output-dir coverage/backend",
+    "test:setup:backend": "node scripts/install-cargo-llvm-cov.mjs",
+    "test:coverage:backend": "cargo llvm-cov --manifest-path src-tauri/Cargo.toml --html --output-dir coverage/backend --ignore-filename-regex \"(src-tauri[/\\\\]src[/\\\\](main|lib)\\.rs|src-tauri[/\\\\]src[/\\\\]commands[/\\\\]export\\.rs|src-tauri[/\\\\]src[/\\\\]bin[/\\\\])\"",
+    "test:coverage:backend:summary": "cargo llvm-cov --manifest-path src-tauri/Cargo.toml --summary-only --ignore-filename-regex \"(src-tauri[/\\\\]src[/\\\\](main|lib)\\.rs|src-tauri[/\\\\]src[/\\\\]commands[/\\\\]export\\.rs|src-tauri[/\\\\]src[/\\\\]bin[/\\\\])\"",
+    "test:coverage:backend:lcov": "cargo llvm-cov --manifest-path src-tauri/Cargo.toml --lcov --output-path coverage/backend/lcov.info --ignore-filename-regex \"(src-tauri[/\\\\]src[/\\\\](main|lib)\\.rs|src-tauri[/\\\\]src[/\\\\]commands[/\\\\]export\\.rs|src-tauri[/\\\\]src[/\\\\]bin[/\\\\])\"",
     "test:all": "pnpm test && pnpm test:backend",
     "test:coverage:all": "pnpm test:coverage && pnpm test:coverage:backend"
   },

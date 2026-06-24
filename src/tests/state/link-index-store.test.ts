@@ -9,8 +9,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  selectAllTags,
   selectBacklinks,
   selectOutgoing,
+  selectTagsInFile,
+  selectUnlinkedMentions,
   useLinkIndexStore,
 } from "@/state/link-index-store";
 import type { LinkRef, TagRef } from "@/bindings";
@@ -248,5 +251,139 @@ describe("selectOutgoing", () => {
       "notes\\a.md",
     );
     expect(out).toHaveLength(1);
+  });
+});
+
+describe("patch — edge cases", () => {
+  it("dropping all rows for a touched file does not orphan its files entry forever", () => {
+    useLinkIndexStore.getState().bulkReplace({
+      files: ["a.md", "b.md"],
+      links: [ref("a.md", 1, "b")],
+      tags: [tag("a.md", 2, "x")],
+      scannedFiles: 2,
+      skippedTooLarge: 0,
+    });
+    // Patch reports a.md exists but has zero links/tags (e.g.
+    // user removed every link from the note).
+    useLinkIndexStore.getState().patch({
+      files: ["a.md"],
+      links: [],
+      tags: [],
+      scannedFiles: 1,
+      skippedTooLarge: 0,
+    });
+    const s = useLinkIndexStore.getState();
+    expect(s.links).toHaveLength(0);
+    expect(s.tags).toHaveLength(0);
+    expect(s.files.has("a.md")).toBe(true);
+  });
+
+  it("two consecutive patches do not double-count rows", () => {
+    useLinkIndexStore.getState().bulkReplace({
+      files: ["a.md"],
+      links: [ref("a.md", 1, "b")],
+      tags: [],
+      scannedFiles: 1,
+      skippedTooLarge: 0,
+    });
+    useLinkIndexStore.getState().patch({
+      files: ["a.md"],
+      links: [ref("a.md", 1, "c")],
+      tags: [],
+      scannedFiles: 1,
+      skippedTooLarge: 0,
+    });
+    useLinkIndexStore.getState().patch({
+      files: ["a.md"],
+      links: [ref("a.md", 1, "c")],
+      tags: [],
+      scannedFiles: 1,
+      skippedTooLarge: 0,
+    });
+    const fromA = useLinkIndexStore.getState().links.filter((l) => l.from === "a.md");
+    // Second patch reasserts the same row but does not duplicate it.
+    expect(fromA).toHaveLength(1);
+  });
+
+  it("KNOWN GAP: backlinks pointing AT a deleted file linger until the source file is rescanned", () => {
+    // Documenting current behaviour. The scanner only re-emits
+    // outbound links for files it was asked to scan. When the
+    // target file is deleted but the *source* file isn't rescanned,
+    // the link sits in the index pointing at nothing. The watcher
+    // hook today only patches the changed/removed files, not their
+    // referrers — so this stale link can survive until the next
+    // bulk scan (vault reopen).
+    useLinkIndexStore.getState().bulkReplace({
+      files: ["a.md", "b.md"],
+      links: [ref("a.md", 1, "b")],
+      tags: [],
+      scannedFiles: 2,
+      skippedTooLarge: 0,
+    });
+    // b.md gets deleted; only b.md is in the patch's `files` set,
+    // and its outbound-links contribution is empty.
+    useLinkIndexStore.getState().patch({
+      files: ["b.md"],
+      links: [],
+      tags: [],
+      scannedFiles: 1,
+      skippedTooLarge: 0,
+    });
+    const out = useLinkIndexStore.getState().links;
+    // Today: a.md → b.md is still there. If we ever decide to
+    // garbage-collect dangling targets, flip this expectation.
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ from: "a.md", target: "b" });
+  });
+});
+describe("selectTagsInFile + selectAllTags + selectUnlinkedMentions", () => {
+  it("selectTagsInFile returns only tags from the given path (normalised)", () => {
+    useLinkIndexStore.getState().bulkReplace({
+      files: ["notes/a.md", "notes/b.md"],
+      links: [],
+      tags: [
+        tag("notes/a.md", 1, "draft"),
+        tag("notes/a.md", 2, "spec"),
+        tag("notes/b.md", 1, "draft"),
+      ],
+      scannedFiles: 2,
+      skippedTooLarge: 0,
+    });
+    const tags = selectTagsInFile(
+      useLinkIndexStore.getState(),
+      "notes\\a.md",
+    );
+    expect(tags.map((t) => t.tag).sort()).toEqual(["draft", "spec"]);
+  });
+
+  it("selectTagsInFile returns [] for a null fileId", () => {
+    expect(
+      selectTagsInFile(useLinkIndexStore.getState(), null),
+    ).toEqual([]);
+  });
+
+  it("selectAllTags rolls up by tag (case-insensitive) and sorts by count desc, then alpha", () => {
+    useLinkIndexStore.getState().bulkReplace({
+      files: ["a.md", "b.md", "c.md"],
+      links: [],
+      tags: [
+        tag("a.md", 1, "Draft"),
+        tag("b.md", 1, "draft"),
+        tag("c.md", 1, "spec"),
+        tag("c.md", 2, "spec"),
+        tag("c.md", 3, "spec"),
+      ],
+      scannedFiles: 3,
+      skippedTooLarge: 0,
+    });
+    const rows = selectAllTags(useLinkIndexStore.getState());
+    expect(rows[0]).toEqual({ tag: "spec", count: 3 });
+    expect(rows[1]).toEqual({ tag: "draft", count: 2 });
+  });
+
+  it("selectUnlinkedMentions returns an empty list (current behavior)", () => {
+    expect(
+      selectUnlinkedMentions(useLinkIndexStore.getState(), "a.md"),
+    ).toEqual([]);
   });
 });

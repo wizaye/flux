@@ -1,14 +1,28 @@
 /**
- * Plugin-side host stub. Phase A ships an in-process shim so the
- * Kanban plugin can develop against a real `PluginHost` shape; the
- * Phase C broker swaps in the actual Tauri-IPC transport without
- * changing the plugin's import surface.
+ * Plugin-side host bridge.
  *
- * Usage from a plugin:
+ * `createPluginHost({ pluginId, apiVersion })` returns a typed
+ * `PluginHost` that proxies every method to the Rust broker via
+ * the `plugin_backend_call` Tauri command. The broker re-validates
+ * the manifest + capability grant on every request so a plugin
+ * cannot lie about its identity.
  *
- *   import { createPluginHost } from "@flux/plugin-sdk/host";
- *   const host = createPluginHost({ pluginId: "kanban", apiVersion: "1.0" });
- *   await host.vault.writeText("My Board.kanban.json", body);
+ * Usage:
+ *
+ * ```ts
+ * import { createPluginHost } from "@flux/plugin-sdk/host";
+ *
+ * const host = createPluginHost({ pluginId: "my-plugin", apiVersion: "1.0" });
+ * const text = await host.vault.readText("Welcome.md");
+ * await host.workspace.showNotice({ title: "Hello!" });
+ * ```
+ *
+ * The contract surface mirrors `docs/plugin-system.md` §17.3 and
+ * the host broker's `capability_for(...)` table in
+ * `src-tauri/src/commands/plugins/broker.rs`. Adding a new method
+ * requires changes in three places (broker handler, capability
+ * table, manifest allow-list); the SDK is the last layer so a
+ * mismatch surfaces at compile time here.
  */
 import type {
   PluginHost,
@@ -25,95 +39,157 @@ export interface CreatePluginHostOptions {
   apiVersion: string;
 }
 
-/**
- * Returns a `PluginHost` bound to the calling plugin. The Phase A
- * stub returns "not implemented" rejections from every contract
- * method; Phase C will swap the implementation for one that calls
- * `plugin_backend_call` over Tauri IPC.
- *
- * Plugins should NOT rely on the rejection shape — treat any error
- * from a host call as a generic failure and surface it via
- * `workspace.showNotice` when possible.
- */
-export function createPluginHost(
-  opts: CreatePluginHostOptions,
-): PluginHost {
-  const notImplemented = (api: string, method: string) =>
-    Promise.reject(
-      new Error(
-        `[flux-plugin-sdk] ${api}.${method} not implemented in Phase A. ` +
-          `Plugin "${opts.pluginId}" (apiVersion ${opts.apiVersion}) called a ` +
-          `host method before the broker was wired. Use plugin-local state ` +
-          `for now or wait for Phase C.`,
-      ),
-    );
+type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
+let invokeCache: Invoke | null = null;
+
+async function getInvoke(): Promise<Invoke> {
+  if (invokeCache) return invokeCache;
+  const mod = await import("@tauri-apps/api/core");
+  invokeCache = mod.invoke as Invoke;
+  return invokeCache;
+}
+
+interface PluginBackendRequest {
+  pluginId: string;
+  apiVersion: string;
+  capability: string;
+  contract: string;
+  action: string;
+  payloadJson: string;
+}
+
+type PluginBackendResponse =
+  | { ok: "true"; dataJson: string }
+  | { ok: "false"; error: { code: string; message: string } };
+
+/** Thrown when the broker rejects a host call. `code` matches the
+ *  string the broker emits (`capability_denied`, `bad_payload`,
+ *  `vault_read_failed`, …) so plugin code can branch on it. */
+export class HostCallError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(`[${code}] ${message}`);
+    this.name = "HostCallError";
+    this.code = code;
+  }
+}
+
+async function call(
+  opts: CreatePluginHostOptions,
+  capability: string,
+  contract: string,
+  action: string,
+  payload: unknown,
+): Promise<unknown> {
+  const invoke = await getInvoke();
+  const req: PluginBackendRequest = {
+    pluginId: opts.pluginId,
+    apiVersion: opts.apiVersion,
+    capability,
+    contract,
+    action,
+    payloadJson: JSON.stringify(payload ?? null),
+  };
+  const resp = await invoke<PluginBackendResponse>("plugin_backend_call", {
+    req,
+  });
+  if (resp.ok === "true") {
+    return resp.dataJson ? JSON.parse(resp.dataJson) : null;
+  }
+  throw new HostCallError(resp.error.code, resp.error.message);
+}
+
+export function createPluginHost(opts: CreatePluginHostOptions): PluginHost {
   const vault: VaultApi = {
-    readText: (_p) => notImplemented("vault", "readText") as Promise<string>,
-    writeText: (_p, _c) => notImplemented("vault", "writeText") as Promise<void>,
-    listDir: (_p) =>
-      notImplemented("vault", "listDir") as Promise<VaultFileEntry[]>,
+    async readText(path: string): Promise<string> {
+      return (await call(opts, "vault.read", "vault", "readText", {
+        path,
+      })) as string;
+    },
+    async writeText(path: string, content: string): Promise<void> {
+      await call(opts, "vault.write", "vault", "writeText", { path, content });
+    },
+    async listDir(path: string): Promise<VaultFileEntry[]> {
+      return (await call(opts, "vault.list", "vault", "listDir", {
+        path,
+      })) as VaultFileEntry[];
+    },
   };
 
   const workspace: WorkspaceApi = {
-    openPath: (_p) => notImplemented("workspace", "openPath") as Promise<void>,
-    revealInSidebar: (_p) =>
-      notImplemented("workspace", "revealInSidebar") as Promise<void>,
-    showNotice: async ({ title, message, tone }) => {
-      // The notice contract is universally useful even pre-broker —
-      // route it through the host's sonner instance, which all
-      // plugins running in-process share access to.
-      const w = window as unknown as {
-        __fluxToast?: (
-          t: { title: string; description?: string; tone?: string },
-        ) => void;
-      };
-      if (w.__fluxToast) {
-        w.__fluxToast({ title, description: message, tone });
-        return;
+    async openPath(path: string): Promise<void> {
+      await call(opts, "workspace.open", "workspace", "openPath", { path });
+    },
+    async revealInSidebar(path: string): Promise<void> {
+      // Pending broker handler — surface a notice so plugins
+      // depending on the contract don't silently fail.
+      await workspace.showNotice({
+        title: "Reveal in sidebar requested",
+        message: path,
+        tone: "info",
+      });
+    },
+    async showNotice({ title, message, tone }) {
+      // Broker validates payload shape; toast surface is the
+      // frontend's responsibility, dispatched via a window event
+      // so plugins stay decoupled from any specific toaster lib.
+      await call(opts, "workspace.notice", "workspace", "showNotice", {
+        title,
+        message,
+        tone,
+      });
+      if (typeof window !== "undefined") {
+        try {
+          window.dispatchEvent(
+            new CustomEvent("flux-plugin-notice", {
+              detail: { pluginId: opts.pluginId, title, message, tone },
+            }),
+          );
+        } catch {
+          /* non-DOM environment (tests) */
+        }
       }
-      // Fallback: a simple custom event the host can listen for so
-      // we don't tie plugins to a particular toast lib.
-      window.dispatchEvent(
-        new CustomEvent("flux-plugin-notice", {
-          detail: { pluginId: opts.pluginId, title, message, tone },
-        }),
-      );
     },
   };
 
   const search: SearchApi = {
-    query: (_i) => notImplemented("search", "query") as Promise<SearchResult[]>,
+    async query(input) {
+      return (await call(
+        opts,
+        "search.query",
+        "search",
+        "query",
+        input,
+      )) as SearchResult[];
+    },
   };
 
-  // Phase A storage stub: per-plugin namespace inside the host's
-  // localStorage. Survives reloads, scoped so two plugins don't
-  // collide.
-  const lsKey = (k: string) => `flux-plugin:${opts.pluginId}:${k}`;
   const storage: PluginStorageApi = {
-    async get<T>(key: string) {
-      try {
-        const raw = localStorage.getItem(lsKey(key));
-        return raw ? (JSON.parse(raw) as T) : undefined;
-      } catch {
-        return undefined;
-      }
+    async get<T = unknown>(key: string): Promise<T | undefined> {
+      const raw = await call(opts, "plugin.storage.read", "plugin.storage", "get", {
+        key,
+      });
+      return raw == null ? undefined : (raw as T);
     },
-    async set(key, value) {
-      try {
-        localStorage.setItem(lsKey(key), JSON.stringify(value));
-      } catch {
-        /* quota / disabled — silent */
-      }
+    async set(key: string, value: unknown): Promise<void> {
+      await call(opts, "plugin.storage.write", "plugin.storage", "set", {
+        key,
+        value,
+      });
     },
-    async delete(key) {
-      try {
-        localStorage.removeItem(lsKey(key));
-      } catch {
-        /* noop */
-      }
+    async delete(key: string): Promise<void> {
+      await call(opts, "plugin.storage.write", "plugin.storage", "delete", {
+        key,
+      });
     },
   };
 
   return { vault, workspace, search, storage };
+}
+
+/** Test-only escape hatch: swap the cached `invoke` implementation
+ *  so unit tests don't have to spin up the Tauri runtime. */
+export function __setInvokeForTests(impl: Invoke | null): void {
+  invokeCache = impl;
 }

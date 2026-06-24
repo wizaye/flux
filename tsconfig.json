@@ -21,11 +21,15 @@
       "@flux/plugin-sdk": ["./plugins/sdk/src/index.ts"],
       "@flux/plugin-sdk/types": ["./plugins/sdk/src/types.ts"],
       "@flux/plugin-sdk/host": ["./plugins/sdk/src/host.ts"],
+      "@flux/plugin-sdk/contract": ["./plugins/sdk/src/contract.ts"],
+      "@flux/plugin-sdk/bridge": ["./plugins/sdk/src/bridge.ts"],
       "@flux/plugin-sdk/layout": ["./plugins/sdk/src/layout.tsx"],
       "@flux/plugin-sdk/drag": ["./plugins/sdk/src/drag.ts"],
       "@flux/plugin-sdk/ui": ["./plugins/sdk/src/ui.ts"],
       "@flux/plugin-kanban": ["./plugins/kanban/src/index.ts"],
-      "@flux/plugin-canvas": ["./plugins/canvas/src/index.ts"]
+      "@flux/plugin-kanban/manifest": ["./plugins/kanban/manifest.json"],
+      "@flux/plugin-canvas": ["./plugins/canvas/src/index.ts"],
+      "@flux/plugin-canvas/manifest": ["./plugins/canvas/manifest.json"]
     },
 
     /* Linting */

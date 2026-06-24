@@ -313,3 +313,128 @@ export async function scanVaultLinksSubset(
 export async function greet(name: string): Promise<string> {
   return await invoke('greet', { name });
 }
+
+// ── Plugin Commands ───────────────────────────────────────────────────────
+//
+// Mirrors `src-tauri/src/commands/plugins/`. All payloads are
+// camelCase to match the Rust `serde(rename_all = "camelCase")`
+// derives.
+
+export interface PluginActivityBarItemDto {
+  id: string;
+  iconUrl: string;
+  tooltip: string;
+  placement?: 'left' | 'right' | null;
+}
+
+export interface PluginSidebarPanelDto {
+  id: string;
+  bundleUrl: string;
+  placement: 'left' | 'right';
+}
+
+export interface PluginEditorViewDto {
+  extensions: string[];
+  bundleUrl: string;
+}
+
+export interface PluginCommandDto {
+  id: string;
+  label: string;
+  palette: boolean;
+}
+
+export interface PluginSettingsPanelDto {
+  label: string;
+  bundleUrl: string;
+}
+
+export interface PluginContributesDto {
+  activityBarItem?: PluginActivityBarItemDto;
+  sidebarPanel?: PluginSidebarPanelDto;
+  editorViews?: PluginEditorViewDto[];
+  commands?: PluginCommandDto[];
+  settingsPanel?: PluginSettingsPanelDto;
+}
+
+export interface PluginCapabilitiesDto {
+  required: string[];
+  optional: string[];
+}
+
+export interface PluginManifestDto {
+  id: string;
+  name: string;
+  version: string;
+  author: string;
+  description: string;
+  minAppVersion?: string;
+  apiVersion: string;
+  capabilities: PluginCapabilitiesDto;
+  contributes: PluginContributesDto;
+}
+
+export interface ScannedPlugin {
+  manifest: PluginManifestDto;
+  pluginDir: string;
+  entryPath: string;
+}
+
+export interface InstallResult {
+  manifest: PluginManifestDto;
+  pluginDir: string;
+  entryPath: string;
+  replaced: boolean;
+}
+
+export interface PluginBackendRequest {
+  pluginId: string;
+  apiVersion: string;
+  capability: string;
+  contract: string;
+  action: string;
+  payloadJson: string;
+}
+
+export type PluginBackendResponse =
+  | { ok: 'true'; dataJson: string }
+  | { ok: 'false'; error: { code: string; message: string } };
+
+/** Walk `<vault>/.zenvault/plugins/` and return every plugin whose
+ *  manifest validates. Empty list when no vault is open. */
+export async function scanPlugins(): Promise<ScannedPlugin[]> {
+  return await invoke('scan_plugins');
+}
+
+/** Install a plugin by copying a local folder into the vault.
+ *  Returns the validated manifest and a `replaced` flag if an
+ *  earlier version was overwritten. */
+export async function installPluginFromFolder(
+  src: string,
+): Promise<InstallResult> {
+  return await invoke('install_plugin_from_folder', { src });
+}
+
+/** Install a plugin by unzipping the archive into the vault.
+ *  The archive must contain `manifest.json` + `dist/index.js` at
+ *  its root; entries that try to escape the staging dir are
+ *  rejected. */
+export async function installPluginFromZip(
+  zipPath: string,
+): Promise<InstallResult> {
+  return await invoke('install_plugin_from_zip', { zipPath });
+}
+
+/** Remove a plugin from disk and wipe its scoped storage. */
+export async function uninstallPlugin(id: string): Promise<void> {
+  return await invoke('uninstall_plugin', { id });
+}
+
+/** Dispatch a capability-gated host call from a plugin. The host
+ *  re-checks the manifest, apiVersion, and capability grant on
+ *  every request — never trust the frontend. */
+export async function pluginBackendCall(
+  req: PluginBackendRequest,
+): Promise<PluginBackendResponse> {
+  return await invoke('plugin_backend_call', { req });
+}

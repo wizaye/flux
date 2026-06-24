@@ -93,13 +93,13 @@ import "./canvas-view.css";
 // Shadcn primitives — used for the floating tool palette + zoom HUD
 // so the canvas chrome matches the rest of the app instead of
 // rolling its own button styles.
-import { Button } from "@/components/ui/button";
 import {
+  Button,
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+} from "@flux/plugin-sdk/ui";
+import { cn } from "@flux/plugin-sdk/bridge";
 
 type Props = {
   /** Raw `.canvas` file body. Parsed on mount + when this changes. */

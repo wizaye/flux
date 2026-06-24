@@ -23,7 +23,7 @@
 //! per-helper functions are crate-public so those tests can reach
 //! them without going through the Tauri command harness.
 
-use crate::commands::fs::common::{get_vault_path_from_state, validate_and_resolve_path};
+use crate::commands::fs::common::{get_vault_path, validate_and_resolve_path};
 use crate::state::AppState;
 use crate::types::AppError;
 use serde::{Deserialize, Serialize};
@@ -269,7 +269,13 @@ pub fn extract_from_file(
 pub async fn scan_vault_links(
     state: State<'_, Arc<AppState>>,
 ) -> Result<LinkScanResult, AppError> {
-    let vault_root = get_vault_path_from_state(&state)?;
+    scan_vault_links_impl(&state).await
+}
+
+pub async fn scan_vault_links_impl(
+    state: &AppState,
+) -> Result<LinkScanResult, AppError> {
+    let vault_root = get_vault_path(state)?;
     let vault_root_clone = vault_root.clone();
 
     let result = tokio::task::spawn_blocking(move || {
@@ -327,7 +333,14 @@ pub async fn scan_vault_links_subset(
     paths: Vec<String>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<LinkScanResult, AppError> {
-    let vault_root = get_vault_path_from_state(&state)?;
+    scan_vault_links_subset_impl(paths, &state).await
+}
+
+pub async fn scan_vault_links_subset_impl(
+    paths: Vec<String>,
+    state: &AppState,
+) -> Result<LinkScanResult, AppError> {
+    let vault_root = get_vault_path(state)?;
     let result = tokio::task::spawn_blocking(move || {
         let mut files: Vec<String> = Vec::new();
         let mut links: Vec<LinkRef> = Vec::new();

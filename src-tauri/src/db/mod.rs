@@ -14,6 +14,31 @@ pub mod repo;
 /// SQLite connection pool type.
 pub type DbPool = Pool<SqliteConnectionManager>;
 
+// ── Tunables ────────────────────────────────────────────────────────────
+//
+// Single-source-of-truth for the magic numbers that used to be
+// scattered through PRAGMA setup. Calling them out by name makes
+// the trade-offs visible to readers: change one, regenerate
+// coverage, profile.
+
+/// Max simultaneous SQLite connections held by the r2d2 pool.
+///
+/// One connection per Tokio blocking thread under sustained load.
+/// Bumping this raises memory + write contention; lowering it risks
+/// pool-exhaustion stalls on the UI when several commands fire at
+/// once (open + watcher reindex + search).
+pub const POOL_MAX_CONNECTIONS: u32 = 8;
+
+/// SQLite `busy_timeout` (milliseconds) — how long a connection
+/// waits for a lock before returning `SQLITE_BUSY`. WAL + a
+/// reasonable timeout virtually eliminates lock errors in the
+/// common single-vault case.
+pub const BUSY_TIMEOUT_MS: u64 = 5_000;
+
+/// Memory-mapped I/O window (bytes). 256 MiB matches SQLite's
+/// recommended sweet-spot on modern desktops with 8+ GiB RAM.
+pub const MMAP_SIZE_BYTES: i64 = 268_435_456;
+
 /// Initialize the database pool with proper PRAGMAs and migrations.
 ///
 /// Creates the database file if it doesn't exist.
@@ -31,17 +56,16 @@ pub fn init_pool(db_path: &Path) -> Result<DbPool> {
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         // Enable foreign keys
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        // 5 second busy timeout
-        conn.pragma_update(None, "busy_timeout", 5_000)?;
+        conn.pragma_update(None, "busy_timeout", BUSY_TIMEOUT_MS as i64)?;
         // Keep temp tables in memory
         conn.pragma_update(None, "temp_store", "MEMORY")?;
-        // 256MB memory-mapped I/O
-        conn.pragma_update(None, "mmap_size", 268_435_456_i64)?;
+        conn.pragma_update(None, "mmap_size", MMAP_SIZE_BYTES)?;
         Ok(())
     });
 
-    // Build pool with 8 max connections
-    let pool = Pool::builder().max_size(8).build(manager)?;
+    let pool = Pool::builder()
+        .max_size(POOL_MAX_CONNECTIONS)
+        .build(manager)?;
 
     // Run migrations on a pooled connection
     {
@@ -61,6 +85,9 @@ fn run_migrations(conn: &mut Connection) -> Result<()> {
         // pre-date `canonicalise_rel()` — rewrites every backslash
         // path to forward-slash and drops duplicate UNIQUE keys.
         M::up(include_str!("../../migrations/003_canonicalise_paths.sql")),
+        // 004 adds the per-plugin scoped key/value store used by the
+        // plugin broker's PluginStorageApi handler.
+        M::up(include_str!("../../migrations/004_plugin_storage.sql")),
         // Future migrations go here
     ]);
 

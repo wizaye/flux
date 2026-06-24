@@ -36,6 +36,13 @@ export function useLinkIndexer() {
   const patch = useLinkIndexStore((s) => s.patch);
   const reset = useLinkIndexStore((s) => s.reset);
   const setScanning = useLinkIndexStore((s) => s.setScanning);
+  // Gate the incremental watcher on the bulk-scan completion flag.
+  // Without this, watcher events firing during the (potentially
+  // slow) bulk scan could call `patch()` first — then `bulkReplace`
+  // arrives with a stale snapshot and clobbers those patched rows.
+  // `hydrated` flips to `true` only after `bulkReplace` finishes,
+  // so subscribing here is the natural barrier.
+  const hydrated = useLinkIndexStore((s) => s.hydrated);
 
   // ── Bulk scan on vault open / clear on close ─────────────────
   useEffect(() => {
@@ -67,7 +74,7 @@ export function useLinkIndexer() {
   const inFlight = useRef(false);
 
   useEffect(() => {
-    if (!isTauri || !isVaultOpen) return;
+    if (!isTauri || !isVaultOpen || !hydrated) return;
     let unlisten: (() => void) | undefined;
     let cancelled = false;
     void (async () => {
@@ -112,5 +119,5 @@ export function useLinkIndexer() {
       if (timer.current !== null) window.clearTimeout(timer.current);
       unlisten?.();
     };
-  }, [isVaultOpen, patch]);
+  }, [isVaultOpen, hydrated, patch]);
 }

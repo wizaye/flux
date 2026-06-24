@@ -13,7 +13,9 @@ import { useVaultOperations } from "./hooks/use-vault-operations";
 import { useThemeAndFontSync } from "./hooks/use-theme-and-font-sync";
 import { useFsWatcherSync } from "./hooks/use-fs-watcher-sync";
 import { useLinkIndexer } from "./hooks/use-link-indexer";
-import { registerBuiltinPlugins } from "./plugins/registry";
+import { useAutosave } from "./hooks/use-autosave";
+import { bootPlugins } from "./plugins/boot";
+import { refreshExternalPlugins } from "./plugins/install";
 import { getLastVaultPath, isTauri } from "./bindings";
 import { GlobalBusyOverlay } from "./components/flux-ui/common/global-busy-overlay";
 import { withBusy } from "./state/busy-store";
@@ -52,12 +54,12 @@ function DetachedShellWrapper() {
 }
 
 function FullShell() {
-  // Register every built-in plugin into the store on first mount.
-  // Idempotent: subsequent renders are no-ops. Built-in plugins
-  // start DISABLED so the activity bar / sidebar stay clean until
-  // the user opts in from Settings → Community plugins.
+  // Register every built-in plugin into the store on first mount,
+  // then ask Rust to scan the vault for any external plugins
+  // dropped into `.zenvault/plugins/`. Both steps are idempotent
+  // and tolerate the no-vault case (boot just no-ops the scan).
   React.useEffect(() => {
-    registerBuiltinPlugins();
+    void bootPlugins();
   }, []);
 
   // Listen for backend `flux://fs-changed` events and quietly refresh
@@ -67,6 +69,9 @@ function FullShell() {
   // Bulk-scan + incrementally maintain the link/tag index that
   // powers the backlinks panel + graph view.
   useLinkIndexer();
+  // Debounced autosave + flush-on-blur/hidden/unload. Ctrl+S still
+  // works as an immediate flush via the editor's keymap.
+  useAutosave();
 
   const isVaultOpen = useVaultStore((s) => s.isVaultOpen);
   const { openVault } = useVaultOperations();
@@ -125,6 +130,14 @@ function FullShell() {
       setShowVaultPicker(true);
     }
   }, [autoOpenChecked, isVaultOpen]);
+
+  // Re-scan `.zenvault/plugins/` whenever the active vault changes.
+  // Skips the IPC call in non-Tauri previews — `refreshExternalPlugins`
+  // would log a warning otherwise.
+  React.useEffect(() => {
+    if (!isTauri || !isVaultOpen) return;
+    void refreshExternalPlugins();
+  }, [isVaultOpen]);
 
   return (
     <TooltipProvider delayDuration={200}>

@@ -12,6 +12,10 @@
     "./view": "./src/view.tsx",
     "./settings": "./src/settings.tsx"
   },
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@flux/plugin-sdk": "workspace:*"
   },

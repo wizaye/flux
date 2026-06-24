@@ -15,8 +15,8 @@ import {
   Search,
 } from "lucide-react";
 
-import { useVaultStore } from "@/state/vault-store";
-import { useFileOperations } from "@/hooks/use-file-operations";
+import { useVaultStore, useFileOperations } from "@flux/plugin-sdk/bridge";
+import type { FileNode } from "@flux/plugin-sdk/bridge";
 
 import {
   AlertDialog,
@@ -27,27 +27,21 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
+  Badge,
+  Button,
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
-} from "@/components/ui/context-menu";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-
-import type { FileNode } from "@/state/editor";
+  Input,
+} from "@flux/plugin-sdk/ui";
 
 import { serialiseBoard } from "./codec";
 import { BOARD_TEMPLATES } from "./schema";

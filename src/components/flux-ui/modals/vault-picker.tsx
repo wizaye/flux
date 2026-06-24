@@ -1,11 +1,12 @@
 /**
  * Vault picker dialog — prompts user to open or create a vault.
- * 
+ *
  * Shows when no vault is open. Uses Tauri's file dialog to select
  * a folder, then calls the vault store to open/create it.
  */
 
 import * as React from 'react';
+import { invalidVaultNameChars, joinVaultPath } from '@/lib/path-join';
 import {
   Dialog,
   DialogContent,
@@ -63,7 +64,7 @@ export function VaultPicker({ open, onClose }: VaultPickerProps) {
       toast.error('Please select a folder');
       return;
     }
-    
+
     setLoading(true);
     try {
       const { withBusy } = await import("@/state/busy-store");
@@ -73,31 +74,38 @@ export function VaultPicker({ open, onClose }: VaultPickerProps) {
         selectedPath,
       );
       onClose?.();
-    } catch (error) {
-      console.error('Failed to open vault:', error);
-      toast.error('Failed to open vault', {
-        description: error instanceof Error ? error.message : String(error),
-      });
+    } catch {
+      // `useVaultOperations.openVault` already surfaces the error
+      // through a toast — duplicating it here would show the same
+      // failure twice to the user.
     } finally {
       setLoading(false);
     }
   };
-  
+
   const handleCreateVault = async () => {
     if (!selectedPath) {
       toast.error('Please select a location');
       return;
     }
-    
-    if (!vaultName.trim()) {
+
+    const trimmedName = vaultName.trim();
+    if (!trimmedName) {
       toast.error('Please enter a vault name');
       return;
     }
-    
+
+    const invalidChars = invalidVaultNameChars(trimmedName);
+    if (invalidChars.length > 0) {
+      toast.error('Invalid vault name', {
+        description: `Cannot contain: ${invalidChars.join(' ')}`,
+      });
+      return;
+    }
+
     setLoading(true);
     try {
-      // Create full path: selectedPath/vaultName
-      const fullPath = `${selectedPath}${selectedPath.endsWith('/') || selectedPath.endsWith('\\\\') ? '' : '/'}${vaultName}`;
+      const fullPath = joinVaultPath(selectedPath, trimmedName);
 
       const { withBusy } = await import("@/state/busy-store");
       await withBusy(
@@ -106,11 +114,8 @@ export function VaultPicker({ open, onClose }: VaultPickerProps) {
         fullPath,
       );
       onClose?.();
-    } catch (error) {
-      console.error('Failed to create vault:', error);
-      toast.error('Failed to create vault', {
-        description: error instanceof Error ? error.message : String(error),
-      });
+    } catch {
+      // see handleOpenVault — createVault toasts on failure.
     } finally {
       setLoading(false);
     }
@@ -203,7 +208,7 @@ export function VaultPicker({ open, onClose }: VaultPickerProps) {
             <div className="flex flex-col gap-1">
               <span className="text-xs text-muted-foreground">Vault will be created at:</span>
               <code className="text-xs bg-muted px-2 py-1 rounded">
-                {selectedPath}{selectedPath.endsWith('/') || selectedPath.endsWith('\\\\') ? '' : '/'}{vaultName}
+                {joinVaultPath(selectedPath, vaultName)}
               </code>
             </div>
           )}

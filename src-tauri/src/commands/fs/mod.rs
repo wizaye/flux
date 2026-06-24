@@ -13,9 +13,15 @@ use tauri::State;
 use uuid::Uuid;
 
 pub mod common;
+pub mod paths;
 pub mod wikilink;
 
-use common::{canonicalise_rel, get_db_pool_from_state, get_vault_path_from_state, validate_and_resolve_path};
+use common::{canonicalise_rel, validate_and_resolve_path};
+use paths::{
+    derive_original_path_from_archive, derive_original_path_from_trash,
+    is_indexable_text, is_ignored_in_tree, is_under_trash_or_archive, is_vault_metadata,
+    ARCHIVE_DIR, TRASH_DIR,
+};
 
 // ── File Operations ───────────────────────────────────────────────────────
 
@@ -27,7 +33,13 @@ pub async fn read_file(
     path: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, AppError> {
-    let vault_path = get_vault_path_from_state(&state)?;
+    read_file_impl(path, &state).await
+}
+
+/// State-agnostic body for [`read_file`]. Used by integration
+/// tests and (later) the plugin broker.
+pub async fn read_file_impl(path: String, state: &AppState) -> Result<String, AppError> {
+    let vault_path = common::get_vault_path(state)?;
     let file_path = validate_and_resolve_path(&vault_path, &path)?;
 
     // Read file content
@@ -55,7 +67,11 @@ pub async fn read_file_binary(
     path: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<u8>, AppError> {
-    let vault_path = get_vault_path_from_state(&state)?;
+    read_file_binary_impl(path, &state).await
+}
+
+pub async fn read_file_binary_impl(path: String, state: &AppState) -> Result<Vec<u8>, AppError> {
+    let vault_path = common::get_vault_path(state)?;
     let file_path = validate_and_resolve_path(&vault_path, &path)?;
 
     let bytes = tokio::fs::read(&file_path).await.map_err(|e| {
@@ -82,7 +98,14 @@ pub async fn get_file_metadata(
     path: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<FileMetadata, AppError> {
-    let vault_path = get_vault_path_from_state(&state)?;
+    get_file_metadata_impl(path, &state).await
+}
+
+pub async fn get_file_metadata_impl(
+    path: String,
+    state: &AppState,
+) -> Result<FileMetadata, AppError> {
+    let vault_path = common::get_vault_path(state)?;
     let file_path = validate_and_resolve_path(&vault_path, &path)?;
 
     let metadata = tokio::fs::metadata(&file_path).await.map_err(|e| {
@@ -125,7 +148,15 @@ pub async fn write_file(
     content: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), AppError> {
-    let vault_path = get_vault_path_from_state(&state)?;
+    write_file_impl(path, content, &state).await
+}
+
+pub async fn write_file_impl(
+    path: String,
+    content: String,
+    state: &AppState,
+) -> Result<(), AppError> {
+    let vault_path = common::get_vault_path(state)?;
     let file_path = validate_and_resolve_path(&vault_path, &path)?;
 
     // Ensure parent directory exists
@@ -148,7 +179,7 @@ pub async fn write_file(
     }
 
     // Update database index
-    let pool = get_db_pool_from_state(&state)?;
+    let pool = common::get_db_pool(state)?;
     let file_metadata = tokio::fs::metadata(&file_path).await.map_err(|e| {
         AppError::Io(format!("Failed to read metadata for resolved path {:?}: {}", file_path, e))
     })?;
@@ -175,7 +206,7 @@ pub async fn write_file(
     // Body capture for FTS upsert (clone-once into the closure). We
     // skip indexing non-text files via a coarse extension check —
     // images / binaries won't tokenise meaningfully.
-    let body_for_fts = if is_indexable(&path) { content.clone() } else { String::new() };
+    let body_for_fts = if is_indexable_text(&path) { content.clone() } else { String::new() };
     let title_for_fts = title.clone();
     let path_for_fts = db_path.clone();
 
@@ -216,16 +247,10 @@ pub async fn write_file(
     Ok(())
 }
 
-/// Cheap content-type gate for the FTS index — only text-like files
-/// get their body tokenised. Avoids bloating the index with binary
-/// blobs that produce zero useful search hits.
-fn is_indexable(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
-    matches!(
-        Path::new(&lower).extension().and_then(|e| e.to_str()),
-        Some("md") | Some("markdown") | Some("txt") | Some("mdx") | Some("rst") | Some("canvas")
-    )
-}
+// `is_indexable_text` lives in [`paths`] — imported at the top of
+// the module so every call site (write, move, watcher reindex) hits
+// the same predicate.
+
 
 /// Write raw bytes to an absolute path outside the vault.
 ///
@@ -285,7 +310,15 @@ pub async fn create_file(
     content: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), AppError> {
-    let vault_path = get_vault_path_from_state(&state)?;
+    create_file_impl(path, content, &state).await
+}
+
+pub async fn create_file_impl(
+    path: String,
+    content: String,
+    state: &AppState,
+) -> Result<(), AppError> {
+    let vault_path = common::get_vault_path(state)?;
     let file_path = validate_and_resolve_path(&vault_path, &path)?;
 
     // Check if file already exists
@@ -294,7 +327,7 @@ pub async fn create_file(
     }
 
     // Use write_file to create with atomic write
-    write_file(path, content, state).await
+    write_file_impl(path, content, state).await
 }
 
 /// Delete a file by moving it to trash.
@@ -307,7 +340,11 @@ pub async fn delete_file(
     path: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), AppError> {
-    let vault_path = get_vault_path_from_state(&state)?;
+    delete_file_impl(path, &state).await
+}
+
+pub async fn delete_file_impl(path: String, state: &AppState) -> Result<(), AppError> {
+    let vault_path = common::get_vault_path(state)?;
     let file_path = validate_and_resolve_path(&vault_path, &path)?;
 
     if !file_path.exists() {
@@ -317,7 +354,7 @@ pub async fn delete_file(
     // Create trash directory for current month
     let now = chrono::Utc::now();
     let trash_month_dir = vault_path
-        .join(".trash")
+        .join(TRASH_DIR)
         .join(now.format("%Y-%m").to_string());
     tokio::fs::create_dir_all(&trash_month_dir).await?;
 
@@ -334,7 +371,7 @@ pub async fn delete_file(
     // truth); a missing or stale row must NEVER block a real FS
     // operation. We log instead of returning so the user gets the
     // "moved to trash" they asked for.
-    let pool = get_db_pool_from_state(&state)?;
+    let pool = common::get_db_pool(state)?;
     let path_for_db = canonicalise_rel(&path);
     if let Err(e) = db::run_blocking(&pool, move |conn| {
         FileRecord::update_state(conn, &path_for_db, FileState::Trashed)?;
@@ -360,7 +397,15 @@ pub async fn move_file(
     dst: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<MoveResult, AppError> {
-    let vault_path = get_vault_path_from_state(&state)?;
+    move_file_impl(src, dst, &state).await
+}
+
+pub async fn move_file_impl(
+    src: String,
+    dst: String,
+    state: &AppState,
+) -> Result<MoveResult, AppError> {
+    let vault_path = common::get_vault_path(state)?;
     let src_path = validate_and_resolve_path(&vault_path, &src)?;
     let dst_path = validate_and_resolve_path(&vault_path, &dst)?;
 
@@ -384,7 +429,7 @@ pub async fn move_file(
     // We also rebuild the FTS row at the new path: the body hasn't
     // changed but the path key has, and `relative_path` is the FTS
     // join key the search panel filters on.
-    let pool = get_db_pool_from_state(&state)?;
+    let pool = common::get_db_pool(state)?;
     let dst_clone = canonicalise_rel(&dst);
     let src_for_db = canonicalise_rel(&src);
     let dst_for_fts = dst_clone.clone();
@@ -396,7 +441,7 @@ pub async fn move_file(
         // the new path with fresh content. Skip silently if the read
         // fails — search staleness is recoverable; a failed rename
         // is not.
-        if is_indexable(&dst_for_fts) {
+        if is_indexable_text(&dst_for_fts) {
             if let Ok(body) = std::fs::read_to_string(&dst_disk_path) {
                 let title = extract_title(&body, &dst_for_fts);
                 db::repo::fts_upsert(conn, &dst_for_fts, &title, &body)?;
@@ -446,7 +491,15 @@ pub async fn rename_file(
     new_name: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<RenameResult, AppError> {
-    let vault_path = get_vault_path_from_state(&state)?;
+    rename_file_impl(path, new_name, &state).await
+}
+
+pub async fn rename_file_impl(
+    path: String,
+    new_name: String,
+    state: &AppState,
+) -> Result<RenameResult, AppError> {
+    let vault_path = common::get_vault_path(state)?;
     let file_path = validate_and_resolve_path(&vault_path, &path)?;
 
     // Construct new path in same directory
@@ -462,7 +515,7 @@ pub async fn rename_file(
         .ok_or_else(|| AppError::InvalidPath("Invalid UTF-8 in path".to_string()))?
         .to_string();
 
-    let result = move_file(path, new_relative, state).await?;
+    let result = move_file_impl(path, new_relative, state).await?;
 
     Ok(RenameResult {
         new_path: result.new_path,
@@ -479,7 +532,14 @@ pub async fn create_directory(
     path: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), AppError> {
-    let vault_path = get_vault_path_from_state(&state)?;
+    create_directory_impl(path, &state).await
+}
+
+pub async fn create_directory_impl(
+    path: String,
+    state: &AppState,
+) -> Result<(), AppError> {
+    let vault_path = common::get_vault_path(state)?;
     let dir_path = validate_and_resolve_path(&vault_path, &path)?;
 
     if dir_path.exists() {
@@ -498,7 +558,14 @@ pub async fn list_directory(
     path: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<FileEntry>, AppError> {
-    let vault_path = get_vault_path_from_state(&state)?;
+    list_directory_impl(path, &state).await
+}
+
+pub async fn list_directory_impl(
+    path: String,
+    state: &AppState,
+) -> Result<Vec<FileEntry>, AppError> {
+    let vault_path = common::get_vault_path(state)?;
     let dir_path = if path.is_empty() {
         vault_path.clone()
     } else {
@@ -520,12 +587,9 @@ pub async fn list_directory(
         let metadata = entry.metadata().await?;
         let entry_path = entry.path();
 
-        // Skip .zenvault, .trash, .archive directories and common ignore patterns
+        // Skip vault-reserved directories and external noise.
         if let Some(name) = entry_path.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with('.') && (name == ".zenvault" || name == ".trash" || name == ".archive") {
-                continue;
-            }
-            if should_ignore_entry(name) {
+            if is_vault_metadata(name) || is_ignored_in_tree(name) {
                 continue;
             }
         }
@@ -564,7 +628,7 @@ pub async fn list_directory(
 
         // Get file state from database if it's a file
         let state_value = if metadata.is_file() {
-            let pool = get_db_pool_from_state(&state)?;
+            let pool = common::get_db_pool(state)?;
             let rel = relative.clone();
             db::run_blocking(&pool, move |conn| {
                 FileRecord::get_by_path(conn, &rel).map(|r| r.map(|rec| rec.state))
@@ -606,8 +670,14 @@ pub async fn list_directory(
 pub async fn get_file_tree(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<FileTreeNode>, AppError> {
-    let vault_path = get_vault_path_from_state(&state)?;
-    let pool = get_db_pool_from_state(&state)?;
+    get_file_tree_impl(&state).await
+}
+
+pub async fn get_file_tree_impl(
+    state: &AppState,
+) -> Result<Vec<FileTreeNode>, AppError> {
+    let vault_path = common::get_vault_path(state)?;
+    let pool = common::get_db_pool(state)?;
 
     tracing::info!("Building file tree for vault: {:?}", vault_path);
     
@@ -624,6 +694,20 @@ pub async fn get_file_tree(
 
 // ── Helper Functions ──────────────────────────────────────────────────────
 
+/// Bytes of YAML frontmatter we'll scan before giving up. Files with
+/// a closing `---` past this point are treated as having no
+/// frontmatter — defensive cap so a malformed multi-MB header can't
+/// stall the title extractor.
+const YAML_FRONTMATTER_SCAN_CAP_BYTES: usize = 16 * 1024;
+
+/// Lines we'll scan when hunting for the first H1. Bounded so a
+/// header-less novel doesn't churn through the entire body.
+const H1_SCAN_LINE_LIMIT: usize = 200;
+
+/// Default title when both the path and content yield nothing
+/// usable.
+const UNTITLED_FALLBACK: &str = "Untitled";
+
 /// Extract title from file content (YAML frontmatter `title:` field
 /// first, then the first H1 heading, then the filename stem). Matches
 /// the precedence Obsidian + most static-site generators use.
@@ -633,7 +717,7 @@ pub(crate) fn extract_title(content: &str, path: &str) -> String {
         Path::new(path)
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or("Untitled")
+            .unwrap_or(UNTITLED_FALLBACK)
             .to_string()
     };
 
@@ -641,10 +725,9 @@ pub(crate) fn extract_title(content: &str, path: &str) -> String {
     if !content.starts_with("---") {
         return first_h1(content).unwrap_or_else(stem_fallback);
     }
-    // Find the closing `---` on its own line. Anything past the first
-    // 16 KiB of YAML is almost certainly malformed; cap the search to
-    // keep the scan cheap on huge files.
-    let cap = bytes.len().min(16 * 1024);
+    // Find the closing `---` on its own line. Anything past the
+    // scan cap is almost certainly malformed; keep the scan cheap.
+    let cap = bytes.len().min(YAML_FRONTMATTER_SCAN_CAP_BYTES);
     let after_first = &content[3..cap];
     let Some(end_rel) = after_first.find("\n---") else {
         return first_h1(content).unwrap_or_else(stem_fallback);
@@ -673,7 +756,7 @@ pub(crate) fn extract_title(content: &str, path: &str) -> String {
 
 /// Return the first `# Heading` text in `content`, if any.
 fn first_h1(content: &str) -> Option<String> {
-    for line in content.lines().take(200) {
+    for line in content.lines().take(H1_SCAN_LINE_LIMIT) {
         let trimmed = line.trim_start();
         if let Some(rest) = trimmed.strip_prefix("# ") {
             let h = rest.trim().to_string();
@@ -685,26 +768,8 @@ fn first_h1(content: &str) -> Option<String> {
     None
 }
 
-/// Check if a file/folder should be ignored.
-fn should_ignore_entry(name: &str) -> bool {
-    const IGNORE_PATTERNS: &[&str] = &[
-        "node_modules",
-        ".git",
-        ".vscode",
-        ".idea",
-        "target",
-        "dist",
-        "build",
-        ".next",
-        ".cache",
-        ".turbo",
-        "coverage",
-        ".DS_Store",
-        "Thumbs.db",
-    ];
-    
-    IGNORE_PATTERNS.contains(&name)
-}
+// Tree-walk noise filter (`is_ignored_in_tree`) lives in [`paths`].
+
 
 /// Recursively build file tree with depth encoding.
 fn build_file_tree(
@@ -731,15 +796,9 @@ fn build_tree_recursive(
         let path = entry.path();
         let metadata = entry.metadata()?;
 
-        // Skip ignored directories and files
+        // Skip vault-reserved directories and external noise.
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            // Skip vault internal directories
-            if name.starts_with('.') && (name == ".zenvault" || name == ".trash" || name == ".archive") {
-                continue;
-            }
-            
-            // Skip common ignore patterns (node_modules, .git, etc.)
-            if should_ignore_entry(name) {
+            if is_vault_metadata(name) || is_ignored_in_tree(name) {
                 continue;
             }
         }
@@ -822,8 +881,12 @@ fn build_tree_recursive(
 pub async fn list_trash(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<TrashEntry>, AppError> {
-    let vault_path = common::get_vault_path_from_state(&state)?;
-    let trash_root = vault_path.join(".trash");
+    list_trash_impl(&state).await
+}
+
+pub async fn list_trash_impl(state: &AppState) -> Result<Vec<TrashEntry>, AppError> {
+    let vault_path = common::get_vault_path(state)?;
+    let trash_root = vault_path.join(TRASH_DIR);
 
     if !trash_root.exists() {
         return Ok(Vec::new());
@@ -889,7 +952,7 @@ pub async fn list_trash(
     }
 
     // Newest first.
-    entries.sort_by(|a, b| b.trashed_at.cmp(&a.trashed_at));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.trashed_at));
     Ok(entries)
 }
 
@@ -905,7 +968,14 @@ pub async fn restore_from_trash(
     trash_path: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, AppError> {
-    let vault_path = common::get_vault_path_from_state(&state)?;
+    restore_from_trash_impl(trash_path, &state).await
+}
+
+pub async fn restore_from_trash_impl(
+    trash_path: String,
+    state: &AppState,
+) -> Result<String, AppError> {
+    let vault_path = common::get_vault_path(state)?;
     let trashed_file = common::validate_and_resolve_path(&vault_path, &trash_path)?;
 
     if !trashed_file.exists() {
@@ -916,22 +986,15 @@ pub async fn restore_from_trash(
     // `.trash/YYYY-MM/` prefix.
     let trash_rel = trashed_file
         .strip_prefix(&vault_path)
-        .map_err(|_| AppError::InvalidPath("Path outside vault".to_string()))?;
-    let mut components = trash_rel.components();
-    let dot_trash = components.next();
-    if dot_trash.and_then(|c| c.as_os_str().to_str()) != Some(".trash") {
-        return Err(AppError::InvalidPath(
-            "Path is not inside .trash/".to_string(),
-        ));
-    }
-    // Skip the YYYY-MM month bucket.
-    components.next();
-    let original_rel: std::path::PathBuf = components.collect();
-    if original_rel.as_os_str().is_empty() {
-        return Err(AppError::InvalidPath(
-            "Cannot determine original path".to_string(),
-        ));
-    }
+        .map_err(|_| AppError::InvalidPath("Path outside vault".to_string()))?
+        .to_string_lossy()
+        .to_string();
+    let original_str = derive_original_path_from_trash(&trash_rel).map_err(|_| {
+        AppError::InvalidPath(
+            "Path is not inside a .trash/<YYYY-MM>/ bucket".to_string(),
+        )
+    })?;
+    let original_rel = std::path::PathBuf::from(&original_str);
     let destination = vault_path.join(&original_rel);
 
     if destination.exists() {
@@ -946,14 +1009,13 @@ pub async fn restore_from_trash(
 
     tokio::fs::rename(&trashed_file, &destination).await?;
 
-    let original_path_str = original_rel
-        .to_str()
-        .ok_or_else(|| AppError::Other("Invalid UTF-8 in path".to_string()))?
-        .to_string();
+    // `derive_original_path_from_trash` already canonicalised to
+    // forward-slashes, so `original_str` doubles as the DB key.
+    let original_path_str = original_str.clone();
 
     // Flip the file's DB state back to Active.
-    let pool = common::get_db_pool_from_state(&state)?;
-    let original_for_db = canonicalise_rel(&original_path_str);
+    let pool = common::get_db_pool(state)?;
+    let original_for_db = original_str;
     let _ = db::run_blocking(&pool, move |conn| {
         FileRecord::update_state(conn, &original_for_db, FileState::Active)
     })
@@ -968,7 +1030,14 @@ pub async fn purge_trash_entry(
     trash_path: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<(), AppError> {
-    let vault_path = common::get_vault_path_from_state(&state)?;
+    purge_trash_entry_impl(trash_path, &state).await
+}
+
+pub async fn purge_trash_entry_impl(
+    trash_path: String,
+    state: &AppState,
+) -> Result<(), AppError> {
+    let vault_path = common::get_vault_path(state)?;
     let trashed_file = common::validate_and_resolve_path(&vault_path, &trash_path)?;
 
     if !trashed_file.exists() {
@@ -978,7 +1047,7 @@ pub async fn purge_trash_entry(
     let rel = trashed_file
         .strip_prefix(&vault_path)
         .map_err(|_| AppError::InvalidPath("Path outside vault".to_string()))?;
-    if !rel.starts_with(".trash") {
+    if !rel.starts_with(TRASH_DIR) {
         return Err(AppError::InvalidPath(
             "Path is not inside .trash/".to_string(),
         ));
@@ -988,6 +1057,30 @@ pub async fn purge_trash_entry(
         tokio::fs::remove_dir_all(&trashed_file).await?;
     } else {
         tokio::fs::remove_file(&trashed_file).await?;
+    }
+
+    // Clean up the matching DB row(s). The file was previously
+    // delete-marked as `Trashed`; with the on-disk artefact now
+    // gone there's no reason to keep the stale row around. We use
+    // a prefix-LIKE so folder purges drop every descendant index
+    // entry too. Best-effort \u2014 the FS op is the source of truth.
+    let pool = common::get_db_pool(state)?;
+    let rel_for_db = canonicalise_rel(&rel.to_string_lossy());
+    if let Err(e) = db::run_blocking(&pool, move |conn| {
+        let prefix = format!("{}/", rel_for_db);
+        conn.execute(
+            "DELETE FROM files WHERE relative_path = ?1 OR relative_path LIKE ?2",
+            rusqlite::params![rel_for_db, format!("{}%", prefix)],
+        )?;
+        conn.execute(
+            "DELETE FROM files_fts WHERE relative_path = ?1 OR relative_path LIKE ?2",
+            rusqlite::params![rel_for_db, format!("{}%", prefix)],
+        )?;
+        Ok(())
+    })
+    .await
+    {
+        tracing::warn!("purge_trash_entry: DB cleanup failed (FS op succeeded): {e}");
     }
 
     Ok(())
@@ -1011,7 +1104,15 @@ pub async fn search_files(
     limit: Option<u32>,
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<SearchHit>, AppError> {
-    let pool = get_db_pool_from_state(&state)?;
+    search_files_impl(query, limit, &state).await
+}
+
+pub async fn search_files_impl(
+    query: String,
+    limit: Option<u32>,
+    state: &AppState,
+) -> Result<Vec<SearchHit>, AppError> {
+    let pool = common::get_db_pool(state)?;
     let cap = limit.unwrap_or(100).min(500);
     let hits = db::run_blocking(&pool, move |conn| db::repo::fts_search(conn, &query, cap))
         .await
@@ -1051,7 +1152,14 @@ pub async fn archive_file(
     path: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, AppError> {
-    let vault_path = get_vault_path_from_state(&state)?;
+    archive_file_impl(path, &state).await
+}
+
+pub async fn archive_file_impl(
+    path: String,
+    state: &AppState,
+) -> Result<String, AppError> {
+    let vault_path = common::get_vault_path(state)?;
     let src = validate_and_resolve_path(&vault_path, &path)?;
 
     if !src.exists() {
@@ -1060,20 +1168,18 @@ pub async fn archive_file(
     // Block archiving inside `.archive/` or `.trash/` so users can't
     // recursively bury already-archived content.
     let norm = path.replace('\\', "/");
-    if norm.starts_with(".archive/") || norm == ".archive"
-        || norm.starts_with(".trash/") || norm == ".trash"
-    {
+    if is_under_trash_or_archive(&norm) {
         return Err(AppError::InvalidPath(
             "Cannot archive items already in .archive or .trash".to_string(),
         ));
     }
 
-    let archive_root = vault_path.join(".archive");
+    let archive_root = vault_path.join(ARCHIVE_DIR);
     tokio::fs::create_dir_all(&archive_root).await?;
 
     let dest = archive_root.join(&path);
     if dest.exists() {
-        return Err(AppError::AlreadyExists(format!(".archive/{path}")));
+        return Err(AppError::AlreadyExists(format!("{ARCHIVE_DIR}/{path}")));
     }
     if let Some(parent) = dest.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -1083,7 +1189,7 @@ pub async fn archive_file(
     // Best-effort DB index update — file rows flip to Archived, FTS
     // drops them so they don't surface in search. Folder archives
     // touch every descendant row.
-    let pool = get_db_pool_from_state(&state)?;
+    let pool = common::get_db_pool(state)?;
     let path_for_db = canonicalise_rel(&path);
     let is_dir_for_db = dest.is_dir();
     if let Err(e) = db::run_blocking(&pool, move |conn| {
@@ -1126,8 +1232,12 @@ pub async fn archive_file(
 pub async fn list_archive(
     state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<ArchiveEntry>, AppError> {
-    let vault_path = get_vault_path_from_state(&state)?;
-    let archive_root = vault_path.join(".archive");
+    list_archive_impl(&state).await
+}
+
+pub async fn list_archive_impl(state: &AppState) -> Result<Vec<ArchiveEntry>, AppError> {
+    let vault_path = common::get_vault_path(state)?;
+    let archive_root = vault_path.join(ARCHIVE_DIR);
 
     if !archive_root.exists() {
         return Ok(Vec::new());
@@ -1181,7 +1291,7 @@ pub async fn list_archive(
     }
 
     // Newest first.
-    entries.sort_by(|a, b| b.archived_at.cmp(&a.archived_at));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.archived_at));
     Ok(entries)
 }
 
@@ -1192,7 +1302,14 @@ pub async fn restore_from_archive(
     archive_path: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<String, AppError> {
-    let vault_path = get_vault_path_from_state(&state)?;
+    restore_from_archive_impl(archive_path, &state).await
+}
+
+pub async fn restore_from_archive_impl(
+    archive_path: String,
+    state: &AppState,
+) -> Result<String, AppError> {
+    let vault_path = common::get_vault_path(state)?;
     let archived = validate_and_resolve_path(&vault_path, &archive_path)?;
 
     if !archived.exists() {
@@ -1201,20 +1318,13 @@ pub async fn restore_from_archive(
 
     let archive_rel = archived
         .strip_prefix(&vault_path)
-        .map_err(|_| AppError::InvalidPath("Path outside vault".to_string()))?;
-    let mut components = archive_rel.components();
-    let dot_archive = components.next();
-    if dot_archive.and_then(|c| c.as_os_str().to_str()) != Some(".archive") {
-        return Err(AppError::InvalidPath(
-            "Path is not inside .archive/".to_string(),
-        ));
-    }
-    let original_rel: std::path::PathBuf = components.collect();
-    if original_rel.as_os_str().is_empty() {
-        return Err(AppError::InvalidPath(
-            "Cannot determine original path".to_string(),
-        ));
-    }
+        .map_err(|_| AppError::InvalidPath("Path outside vault".to_string()))?
+        .to_string_lossy()
+        .to_string();
+    let original_str = derive_original_path_from_archive(&archive_rel).map_err(|_| {
+        AppError::InvalidPath("Path is not inside .archive/".to_string())
+    })?;
+    let original_rel = std::path::PathBuf::from(&original_str);
     let destination = vault_path.join(&original_rel);
 
     if destination.exists() {
@@ -1227,10 +1337,11 @@ pub async fn restore_from_archive(
     }
     tokio::fs::rename(&archived, &destination).await?;
 
-    let original_str = canonicalise_rel(&original_rel.to_string_lossy());
+    // `derive_original_path_from_archive` already produced a
+    // forward-slash canonical path.
 
     // Flip DB state back to Active (best-effort).
-    let pool = get_db_pool_from_state(&state)?;
+    let pool = common::get_db_pool(state)?;
     let original_for_db = original_str.clone();
     let is_dir_for_db = destination.is_dir();
     let _ = db::run_blocking(&pool, move |conn| {
@@ -1248,4 +1359,93 @@ pub async fn restore_from_archive(
     .await;
 
     Ok(original_str)
+}
+
+// ── Unit tests (private helpers) ──────────────────────────────────────────
+//
+// Inline tests for pure functions that don't need a full Tauri runtime
+// or a real vault on disk. Integration tests that exercise the
+// command surface live under `src-tauri/tests/`.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── extract_title ──────────────────────────────────────────────
+
+    #[test]
+    fn extract_title_prefers_yaml_title() {
+        let content = "---\ntitle: My YAML Title\nauthor: Vijay\n---\n# H1 Header\n";
+        assert_eq!(extract_title(content, "notes/foo.md"), "My YAML Title");
+    }
+
+    #[test]
+    fn extract_title_strips_quotes_around_yaml_value() {
+        let content = "---\ntitle: \"Quoted Title\"\n---\nbody\n";
+        assert_eq!(extract_title(content, "x.md"), "Quoted Title");
+        let single = "---\ntitle: 'Single Quoted'\n---\n";
+        assert_eq!(extract_title(single, "x.md"), "Single Quoted");
+    }
+
+    #[test]
+    fn extract_title_falls_back_to_h1_when_yaml_missing_title() {
+        let content = "---\nauthor: vijay\n---\n# Heading One\nbody\n";
+        assert_eq!(extract_title(content, "x.md"), "Heading One");
+    }
+
+    #[test]
+    fn extract_title_uses_h1_when_no_frontmatter() {
+        let content = "# Just an H1\nbody text\n";
+        assert_eq!(extract_title(content, "irrelevant.md"), "Just an H1");
+    }
+
+    #[test]
+    fn extract_title_falls_back_to_filename_stem() {
+        assert_eq!(extract_title("plain body, no headings", "notes/my-file.md"), "my-file");
+        assert_eq!(extract_title("", "deeply/nested/path/Foo Bar.md"), "Foo Bar");
+    }
+
+    #[test]
+    fn extract_title_first_h1_scans_whole_file() {
+        // `first_h1` deliberately scans every line of the document
+        // (capped at 200 lines), so a `# heading` inside a YAML
+        // literal block counts. Documenting current behaviour —
+        // future spec change should also update this test.
+        let content = "---\nauthor: vijay\nnotes: |\n  # synthetic heading\n---\nbody only\n";
+        assert_eq!(extract_title(content, "x.md"), "synthetic heading");
+    }
+
+    #[test]
+    fn extract_title_skips_empty_yaml_title_value() {
+        let content = "---\ntitle:   \n---\n# H1\n";
+        assert_eq!(extract_title(content, "x.md"), "H1");
+    }
+
+    #[test]
+    fn extract_title_skips_unterminated_yaml_block() {
+        // No closing `---` → behave as if no frontmatter; fall to H1 / stem.
+        let content = "---\ntitle: never closes\n";
+        assert_eq!(extract_title(content, "fallback.md"), "fallback");
+    }
+
+    #[test]
+    fn extract_title_uses_untitled_when_stem_missing() {
+        assert_eq!(extract_title("", ""), "Untitled");
+    }
+
+    // `is_indexable_text` and `is_ignored_in_tree` are tested in
+    // [`paths::tests`] so we don't duplicate the coverage here.
+
+    // ── first_h1 (via extract_title indirection) ───────────────────
+
+    #[test]
+    fn extract_title_trims_trailing_spaces_on_h1() {
+        assert_eq!(extract_title("#   Spaced Out   \nbody", "x.md"), "Spaced Out");
+    }
+
+    #[test]
+    fn extract_title_only_matches_h1_not_h2_or_h3() {
+        let content = "## H2 not H1\n### H3\nbody\n";
+        assert_eq!(extract_title(content, "fallback.md"), "fallback");
+    }
 }

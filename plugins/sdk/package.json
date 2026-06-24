@@ -1,8 +1,9 @@
 {
   "name": "@flux/plugin-sdk",
-  "version": "0.0.1",
+  "version": "1.0.0-rc.1",
   "private": true,
-  "description": "Shared types + tiny host stub for Flux plugins. Imported by every plugin package.",
+  "description": "Shared types, capability constants, and host bridge for Flux plugins. Every plugin imports from here; nothing in this package depends on host internals.",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -10,11 +11,58 @@
     ".": "./src/index.ts",
     "./types": "./src/types.ts",
     "./host": "./src/host.ts",
+    "./contract": "./src/contract.ts",
     "./layout": "./src/layout.tsx",
     "./drag": "./src/drag.ts",
-    "./ui": "./src/ui.ts"
+    "./ui": "./src/ui.ts",
+    "./bridge": "./src/bridge.ts"
   },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "pnpm run build"
+  },
+  "files": [
+    "dist",
+    "src",
+    "!src/bridge.ts",
+    "!src/ui.ts",
+    "README.md",
+    "LICENSE"
+  ],
   "peerDependencies": {
-    "react": "*"
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./types": {
+        "types": "./dist/types.d.ts",
+        "import": "./dist/types.js"
+      },
+      "./host": {
+        "types": "./dist/host.d.ts",
+        "import": "./dist/host.js"
+      },
+      "./contract": {
+        "types": "./dist/contract.d.ts",
+        "import": "./dist/contract.js"
+      },
+      "./layout": {
+        "types": "./dist/layout.d.ts",
+        "import": "./dist/layout.js"
+      },
+      "./drag": {
+        "types": "./dist/drag.d.ts",
+        "import": "./dist/drag.js"
+      }
+    }
   }
 }

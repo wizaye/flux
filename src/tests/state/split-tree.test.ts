@@ -23,6 +23,8 @@ import {
   moveTabWithinLeaf,
   removeTabFromLeaf,
   splitLeaf,
+  setSplitRatio,
+  edgeToSplitArgs,
 } from "@/state/editor/split-tree";
 
 // ── Fixture helpers ────────────────────────────────────────────────────────
@@ -467,5 +469,77 @@ describe("splitLeaf", () => {
     // Splitting a non-existent id should return the tree unchanged
     const result = splitLeaf(l1, "missing", "horizontal", l2, true);
     expect(result).toBe(l1);
+  });
+});
+
+describe("setSplitRatio", () => {
+  it("updates the ratio of the matching split node", () => {
+    const tree = splitLeaf(leaf("l1", ["a"]), "l1", "horizontal", leaf("l2", ["b"]), true) as Extract<SplitTree, { kind: "split" }>;
+    const updated = setSplitRatio(tree, tree.id, 0.7) as Extract<
+      SplitTree,
+      { kind: "split" }
+    >;
+    expect(updated.ratio).toBe(0.7);
+  });
+
+  it("clamps ratios outside [0.05, 0.95]", () => {
+    const tree = splitLeaf(leaf("l1", ["a"]), "l1", "vertical", leaf("l2", ["b"]), false) as Extract<SplitTree, { kind: "split" }>;
+    const low = setSplitRatio(tree, tree.id, -1) as Extract<
+      SplitTree,
+      { kind: "split" }
+    >;
+    const high = setSplitRatio(tree, tree.id, 9.9) as Extract<
+      SplitTree,
+      { kind: "split" }
+    >;
+    expect(low.ratio).toBe(0.05);
+    expect(high.ratio).toBe(0.95);
+  });
+
+  it("returns the same tree (referentially) when the id is missing", () => {
+    const tree = splitLeaf(leaf("l1", ["a"]), "l1", "horizontal", leaf("l2", ["b"]), true);
+    const out = setSplitRatio(tree, "no-such-id", 0.6);
+    expect(out).toBe(tree);
+  });
+
+  it("leaves a pure-leaf tree untouched", () => {
+    const t = leaf("l1", ["a"]);
+    expect(setSplitRatio(t, "anything", 0.5)).toBe(t);
+  });
+});
+
+describe("edgeToSplitArgs", () => {
+  it("maps left/right to horizontal with placeAfter set per side", () => {
+    expect(edgeToSplitArgs("left")).toEqual({
+      direction: "horizontal",
+      placeAfter: false,
+    });
+    expect(edgeToSplitArgs("right")).toEqual({
+      direction: "horizontal",
+      placeAfter: true,
+    });
+  });
+
+  it("maps top/bottom to vertical with placeAfter set per side", () => {
+    expect(edgeToSplitArgs("top")).toEqual({
+      direction: "vertical",
+      placeAfter: false,
+    });
+    expect(edgeToSplitArgs("bottom")).toEqual({
+      direction: "vertical",
+      placeAfter: true,
+    });
+  });
+});
+describe("setSplitRatio — no-op reference identity preserved", () => {
+  it("returns the same node reference when the ratio change is rejected by descent (id matches no split)", () => {
+    // Nested split where every walked branch is unchanged.
+    const inner = splitLeaf(leaf("l1", ["a"]), "l1", "horizontal", leaf("l2", ["b"]), true);
+    const outer = splitLeaf(inner, "l1", "vertical", leaf("l3", ["c"]), true);
+    // Provide a splitId that doesn't match any node — walk recurses
+    // through every branch, returns the same children, and the outer
+    // node IS returned unchanged.
+    const result = setSplitRatio(outer, "missing-split-id", 0.5);
+    expect(result).toBe(outer);
   });
 });

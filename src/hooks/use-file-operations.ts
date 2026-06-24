@@ -44,6 +44,12 @@ export function useFileOperations() {
 
   /**
    * Save a file to disk.
+   *
+   * Silent on success — saves happen frequently (autosave debounce
+   * + Ctrl/Cmd+S + lifecycle flushes) and a toast per save would
+   * spam the notification area. The vanishing dirty dot on the tab
+   * is the signal the user needs. Failures still toast so they
+   * never go unnoticed.
    */
   const saveFile = useCallback(async (path: string, content: string) => {
     try {
@@ -51,7 +57,6 @@ export function useFileOperations() {
       const store = useVaultStore.getState();
       store.setFileContent(path, content);
       store.markClean(path);
-      toast.success(`Saved: ${path}`);
     } catch (error) {
       toast.error(`Failed to save file: ${path}`, {
         description: formatError(error),

@@ -53,18 +53,18 @@ import {
 
 import type { EditorViewProps } from "@flux/plugin-sdk/types";
 import { PluginPaneLayout } from "@flux/plugin-sdk/layout";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
+  Badge,
+  Button,
+  Input,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
+} from "@flux/plugin-sdk/ui";
 
-import { useFileOperations } from "@/hooks/use-file-operations";
+import { useFileOperations } from "@flux/plugin-sdk/bridge";
 
 import { parseBoard, serialiseBoard } from "./codec";
 import {

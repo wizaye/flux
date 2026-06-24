@@ -18,11 +18,8 @@
 import * as React from "react";
 import { toast } from "sonner";
 
-import { useVaultStore } from "@/state/vault-store";
-import { useFileOperations } from "@/hooks/use-file-operations";
-import { useTabSyncStore } from "@/state/tab-sync-store";
-
-import type { FileNode } from "@/state/editor";
+import { useVaultStore, useTabSyncStore, useFileOperations } from "@flux/plugin-sdk/bridge";
+import type { FileNode } from "@flux/plugin-sdk/bridge";
 
 import { LinkWorkItemDialog } from "./link-picker";
 import { parseBoard, serialiseBoard } from "./codec";

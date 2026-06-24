@@ -150,3 +150,49 @@ describe("vaultStore - tree mutations", () => {
     expect(useVaultStore.getState().fileTree).toBe(before);
   });
 });
+
+describe("vaultStore - tree rename edge cases", () => {
+  it("renaming a folder from 'a' to 'aa' preserves descendant slash boundary", () => {
+    // Regression: a naive slice(oldPath.length) implementation could
+    // produce 'aab.md' instead of 'aa/b.md' when oldPath grows. The
+    // current impl uses `oldPath.length` AND the descendant id
+    // already starts with `oldPath + sep`, so the slice yields the
+    // leading separator which the join preserves. Pin this behaviour
+    // so a future refactor doesn't reintroduce the off-by-one risk.
+    const { addNodeToTree, renameNodeInTree } = useVaultStore.getState();
+    addNodeToTree("a", "folder");
+    addNodeToTree("a/b.md", "file");
+    addNodeToTree("a/sub", "folder");
+    addNodeToTree("a/sub/c.md", "file");
+
+    renameNodeInTree("a", "aa");
+
+    const tree = useVaultStore.getState().fileTree;
+    const aa = tree.find((t) => t.id === "aa");
+    expect(aa).toBeDefined();
+    const ids = (aa!.children ?? []).flatMap((n) => [
+      n.id,
+      ...((n.children ?? []).map((c) => c.id)),
+    ]);
+    // Every descendant id must keep its `/` separator after the rename.
+    expect(ids).toContain("aa/b.md");
+    expect(ids).toContain("aa/sub");
+    expect(ids).toContain("aa/sub/c.md");
+    // And must NOT have collapsed into the broken `aab.md` form.
+    expect(ids.every((id) => !id.startsWith("aab") || id === "aab")).toBe(true);
+  });
+
+  it("renaming when no descendants share the slash boundary (case sensitivity)", () => {
+    const { addNodeToTree, renameNodeInTree } = useVaultStore.getState();
+    addNodeToTree("notes", "folder");
+    addNodeToTree("notes/a.md", "file");
+    addNodeToTree("Notes-Backup.md", "file"); // unrelated, different prefix
+
+    renameNodeInTree("notes", "Notes");
+
+    const tree = useVaultStore.getState().fileTree;
+    expect(tree.find((t) => t.id === "Notes-Backup.md")).toBeDefined();
+    const Notes = tree.find((t) => t.id === "Notes")!;
+    expect(Notes.children![0].id).toBe("Notes/a.md");
+  });
+});

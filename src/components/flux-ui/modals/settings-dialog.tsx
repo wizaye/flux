@@ -57,6 +57,12 @@ import {
 } from "@/state/settings-store";
 import { usePluginStore } from "@/state/plugin-store";
 import {
+  installFromFolder as installPluginFromFolder,
+  installFromZip as installPluginFromZip,
+  uninstall as uninstallPluginToDisk,
+} from "@/plugins/install";
+import { toast } from "sonner";
+import {
   IcArchive,
   IcBook,
   IcBookmark,
@@ -359,47 +365,141 @@ function SectionBody({ section }: { section: Section }) {
 
 /**
  * Community plugins landing — installed plugin list with enable
- * toggle + uninstall button + the "browse community" placeholder.
+ * toggle + uninstall button + folder/zip install controls.
  * Plugin-specific settings live under each plugin's own
  * `settingsPanel` section.
  */
 function CommunityPluginsBody() {
   const plugins = usePluginStore((s) => s.plugins);
   const setEnabled = usePluginStore((s) => s.setEnabled);
-  const uninstall = usePluginStore((s) => s.uninstall);
-  const community = plugins.filter((p) => p.loaderKind === "external" || true);
+  const [busy, setBusy] = React.useState(false);
+
+  const handleInstallFromFolder = React.useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
+      const picked = await openDialog({ directory: true, multiple: false });
+      if (!picked || typeof picked !== "string") return;
+      const result = await installPluginFromFolder(picked);
+      toast.success(
+        `${result.replaced ? "Updated" : "Installed"} ${result.manifest.name}`,
+        { description: `v${result.manifest.version} · ${result.manifest.id}` },
+      );
+    } catch (e) {
+      toast.error("Plugin install failed", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setBusy(false);
+    }
+  }, [busy]);
+
+  const handleInstallFromZip = React.useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const { open: openDialog } = await import("@tauri-apps/plugin-dialog");
+      const picked = await openDialog({
+        directory: false,
+        multiple: false,
+        filters: [{ name: "Plugin archive", extensions: ["zip"] }],
+      });
+      if (!picked || typeof picked !== "string") return;
+      const result = await installPluginFromZip(picked);
+      toast.success(
+        `${result.replaced ? "Updated" : "Installed"} ${result.manifest.name}`,
+        { description: `v${result.manifest.version} · ${result.manifest.id}` },
+      );
+    } catch (e) {
+      toast.error("Plugin install failed", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setBusy(false);
+    }
+  }, [busy]);
+
+  const handleUninstall = React.useCallback(async (id: string, name: string) => {
+    try {
+      await uninstallPluginToDisk(id);
+      toast.success(`Uninstalled ${name}`);
+    } catch (e) {
+      toast.error("Uninstall failed", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }, []);
+
   return (
     <div>
       <SectionTitle>Installed plugins</SectionTitle>
-      {community.length === 0 ? (
+      {plugins.length === 0 ? (
         <p className="text-[12.5px] text-muted-foreground py-4">
           No plugins installed yet.
         </p>
       ) : (
-        community.map((p) => (
-          <Row
-            key={p.id}
-            title={p.manifest.name}
-            description={`${p.manifest.author} · v${p.version} — ${p.manifest.description}`}
-          >
-            <div className="flex items-center gap-3">
-              <Switch
-                checked={p.enabled}
-                onCheckedChange={(v) => setEnabled(p.id, v === true)}
-              />
-              {p.loaderKind === "external" && (
-                <button
-                  type="button"
-                  onClick={() => uninstall(p.id)}
-                  className="text-[11px] text-destructive hover:underline"
-                >
-                  Uninstall
-                </button>
-              )}
-            </div>
-          </Row>
-        ))
+        plugins.map((p) => {
+          const caps = [
+            ...p.manifest.capabilities.required,
+            ...(p.manifest.capabilities.optional ?? []),
+          ];
+          const tag =
+            p.loaderKind === "external" ? "Community" : "Built-in";
+          const description =
+            `${tag} · ${p.manifest.author} · v${p.version} — ${p.manifest.description}` +
+            (caps.length > 0 ? `\nCapabilities: ${caps.join(", ")}` : "");
+          return (
+            <Row
+              key={p.id}
+              title={p.manifest.name}
+              description={description}
+            >
+              <div className="flex items-center gap-3">
+                <Switch
+                  checked={p.enabled}
+                  onCheckedChange={(v) => setEnabled(p.id, v === true)}
+                />
+                {p.loaderKind === "external" && (
+                  <button
+                    type="button"
+                    onClick={() => handleUninstall(p.id, p.manifest.name)}
+                    className="text-[11px] text-destructive hover:underline"
+                  >
+                    Uninstall
+                  </button>
+                )}
+              </div>
+            </Row>
+          );
+        })
       )}
+
+      <SectionTitle>Install a plugin</SectionTitle>
+      <Row
+        title="From folder"
+        description="Pick a folder that contains manifest.json + dist/index.js. Used for local development and sideloading."
+      >
+        <Button
+          variant="outline"
+          disabled={busy}
+          onClick={handleInstallFromFolder}
+        >
+          Choose folder
+        </Button>
+      </Row>
+      <Row
+        title="From archive"
+        description="Pick a .zip distributed by a plugin author. The archive must contain manifest.json + dist/index.js at its root."
+      >
+        <Button
+          variant="outline"
+          disabled={busy}
+          onClick={handleInstallFromZip}
+        >
+          Choose .zip
+        </Button>
+      </Row>
 
       <SectionTitle>Browse community plugins</SectionTitle>
       <Row

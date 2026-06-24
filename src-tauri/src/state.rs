@@ -15,6 +15,13 @@ pub struct AppState {
     /// `None` when no vault is open.
     pub db_pool: Mutex<Option<DbPool>>,
 
+    /// Unix-epoch milliseconds at which the current vault was opened.
+    /// Captured once in `open_vault_impl` and returned by every
+    /// `get_vault_info` call so the frontend sees a stable session
+    /// start time (it powers the "vault opened X ago" status pill).
+    /// Cleared on `close_vault`.
+    pub vault_opened_at: Mutex<Option<i64>>,
+
     /// Keeps the `notify-debouncer-full` Debouncer alive.
     /// Set to `None` to stop watching; replaced on every `open_vault` call.
     pub watcher: Mutex<Option<Box<dyn std::any::Any + Send>>>,
@@ -25,6 +32,7 @@ impl Default for AppState {
         Self {
             vault_path: Mutex::new(None),
             db_pool: Mutex::new(None),
+            vault_opened_at: Mutex::new(None),
             watcher: Mutex::new(None),
         }
     }

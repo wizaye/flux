@@ -90,12 +90,7 @@ impl FileRecord {
             .query_row(params![path], |row| {
                 let id_bytes: Vec<u8> = row.get(0)?;
                 let state_str: String = row.get(5)?;
-                let state = match state_str.as_str() {
-                    "active" => FileState::Active,
-                    "archived" => FileState::Archived,
-                    "trashed" => FileState::Trashed,
-                    _ => FileState::Active,
-                };
+                let state = FileState::from_db_str(&state_str);
 
                 Ok(FileRecord {
                     id: Uuid::from_slice(&id_bytes).unwrap(),
@@ -163,12 +158,7 @@ impl FileRecord {
             .query_map(params![state.as_str()], |row| {
                 let id_bytes: Vec<u8> = row.get(0)?;
                 let state_str: String = row.get(5)?;
-                let state = match state_str.as_str() {
-                    "active" => FileState::Active,
-                    "archived" => FileState::Archived,
-                    "trashed" => FileState::Trashed,
-                    _ => FileState::Active,
-                };
+                let state = FileState::from_db_str(&state_str);
 
                 Ok(FileRecord {
                     id: Uuid::from_slice(&id_bytes).unwrap(),

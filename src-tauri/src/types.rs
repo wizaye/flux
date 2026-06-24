@@ -36,11 +36,27 @@ pub enum FileState {
 }
 
 impl FileState {
+    /// Lower-case canonical string used in the `state` column of
+    /// the `files` table. Pair with [`FileState::from_db_str`].
     pub fn as_str(&self) -> &'static str {
         match self {
             FileState::Active => "active",
             FileState::Archived => "archived",
             FileState::Trashed => "trashed",
+        }
+    }
+
+    /// Parse the canonical lower-case string stored in SQLite.
+    ///
+    /// Unknown / corrupt values are treated as `Active` so a row
+    /// that survives an upgrade with new states never disappears
+    /// from the user's view. This is the symmetric inverse of
+    /// [`FileState::as_str`].
+    pub fn from_db_str(raw: &str) -> Self {
+        match raw {
+            "archived" => FileState::Archived,
+            "trashed" => FileState::Trashed,
+            _ => FileState::Active,
         }
     }
 }

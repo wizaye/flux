@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig.json",
+  // Shared TypeScript base for every Flux plugin. Plugins extend
+  // this in their own `tsconfig.json` and only need to override
+  // the `include` array.
+  //
+  // Why a separate base instead of extending the root tsconfig:
+  // the root config registers `@/*` / `@/components/*` path
+  // aliases that point into the host app. Plugins must NOT reach
+  // into the host source tree — every host surface they consume
+  // must come through `@flux/plugin-sdk`. Keeping a slim base
+  // here enforces that boundary at compile time.
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "useDefineForClassFields": true,
+    "skipLibCheck": true,
+
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": false,
+
+    // Plugins resolve the SDK through their own package
+    // dependency declaration (`"@flux/plugin-sdk": "workspace:*"`
+    // today, `"@flux/plugin-sdk": "^1.0.0"` once published). No
+    // path aliases here — that's the host's concern.
+    "types": []
+  },
+  // Concrete plugins override this with their own `src` glob.
+  "include": []
+}

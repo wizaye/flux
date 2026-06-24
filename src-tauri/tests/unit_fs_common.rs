@@ -56,3 +56,26 @@ fn accepts_empty_string_as_vault_root() {
     let p = validate_and_resolve_path(&vault(), "").unwrap();
     assert_eq!(p, vault());
 }
+
+#[test]
+fn allows_double_dots_inside_filenames() {
+    // Regression: a bare `contains("..")` check rejected legit
+    // names like `release-notes-v1..3.md`. The component-aware
+    // check accepts them.
+    for ok in &[
+        "release-notes-v1..3.md",
+        "notes/foo..bar.md",
+        "..hidden.md",
+        "trailing..md",
+    ] {
+        let p = validate_and_resolve_path(&vault(), ok)
+            .unwrap_or_else(|e| panic!("expected ok for {}: {:?}", ok, e));
+        assert!(p.starts_with(vault()), "resolved path stays in vault: {}", ok);
+    }
+}
+
+#[test]
+fn rejects_null_byte_in_path() {
+    let err = validate_and_resolve_path(&vault(), "notes/a\0.md").unwrap_err();
+    assert!(matches!(err, AppError::InvalidPath(_)));
+}

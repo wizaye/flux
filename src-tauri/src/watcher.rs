@@ -145,29 +145,16 @@ fn to_vault_relative(abs: &Path, vault_path: &Path) -> Option<String> {
         .map(|p| p.to_string_lossy().replace('\\', "/"))
 }
 
-fn is_ignored(rel: &str) -> bool {
-    if rel.is_empty() {
-        return true;
-    }
-    if rel.ends_with(".tmp") {
-        return true;
-    }
-    for part in rel.split('/') {
-        if part == ".zenvault" || part == ".git" || part == "node_modules" || part == ".trash" {
-            return true;
-        }
-        if part.starts_with('.') && part.len() > 1 {
-            return true;
-        }
-    }
-    false
-}
+use crate::commands::fs::paths::{is_ignored_by_watcher as is_ignored, is_indexable_text as is_indexable};
 
 /// Re-index changed files into `files` + `files_fts`. Removed files
 /// get their FTS row dropped and their `files` row state flipped to
 /// `Trashed` (we don't hard-delete since the user might be moving a
 /// file rather than deleting it).
-fn reindex(
+///
+/// Exposed at crate-level so integration tests can exercise the
+/// reindex path without spinning up a live `notify` subscription.
+pub fn reindex(
     pool: &DbPool,
     vault_path: &Path,
     changed: &[String],
@@ -235,16 +222,108 @@ fn reindex(
     Ok(())
 }
 
-fn is_indexable(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
-    matches!(
-        Path::new(&lower).extension().and_then(|e| e.to_str()),
-        Some("md") | Some("markdown") | Some("txt") | Some("mdx") | Some("rst") | Some("canvas")
-    )
-}
-
 /// `Arc<AppState>` ergonomic accessor — not used here but kept so
 /// the call site in `vault::open_vault` doesn't need to reach into
 /// internals.
 #[allow(dead_code)]
 pub fn _typecheck(_a: Arc<crate::state::AppState>) {}
+
+// ── Unit tests (private helpers) ──────────────────────────────────────────
+//
+// Tests for the pure event helpers (partition_events,
+// to_vault_relative). The ignore + indexable predicates re-export
+// from `crate::commands::fs::paths` so they're tested in that
+// module's own `tests` block to avoid duplicate coverage here.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use notify::event::{CreateKind, ModifyKind, RemoveKind};
+    use notify_debouncer_full::DebouncedEvent;
+    use std::time::Instant;
+
+    fn ev(kind: EventKind, abs_paths: &[&Path]) -> DebouncedEvent {
+        let event = notify::Event {
+            kind,
+            paths: abs_paths.iter().map(|p| p.to_path_buf()).collect(),
+            attrs: Default::default(),
+        };
+        DebouncedEvent {
+            event,
+            time: Instant::now(),
+        }
+    }
+
+    // ── to_vault_relative ──────────────────────────────────────────
+
+    #[test]
+    fn to_vault_relative_strips_vault_prefix_and_normalises_separators() {
+        let vault = Path::new("/tmp/vault");
+        let abs = Path::new("/tmp/vault/notes/topic.md");
+        assert_eq!(to_vault_relative(abs, vault).unwrap(), "notes/topic.md");
+    }
+
+    #[test]
+    fn to_vault_relative_returns_none_for_paths_outside_vault() {
+        let vault = Path::new("/tmp/vault");
+        let outside = Path::new("/etc/passwd");
+        assert!(to_vault_relative(outside, vault).is_none());
+    }
+
+    // ── partition_events ───────────────────────────────────────────
+
+    #[test]
+    fn partition_events_separates_create_modify_from_remove() {
+        let vault = Path::new("/tmp/vault");
+        let a = vault.join("a.md");
+        let b = vault.join("b.md");
+        let c = vault.join("c.md");
+        let events = vec![
+            ev(EventKind::Create(CreateKind::File), &[a.as_path()]),
+            ev(EventKind::Modify(ModifyKind::Any), &[b.as_path()]),
+            ev(EventKind::Remove(RemoveKind::File), &[c.as_path()]),
+        ];
+        let (changed, removed) = partition_events(&events, vault);
+        assert_eq!(changed, vec!["a.md", "b.md"]);
+        assert_eq!(removed, vec!["c.md"]);
+    }
+
+    #[test]
+    fn partition_events_deduplicates_repeated_paths() {
+        let vault = Path::new("/tmp/vault");
+        let a = vault.join("note.md");
+        let events = vec![
+            ev(EventKind::Modify(ModifyKind::Any), &[a.as_path()]),
+            ev(EventKind::Modify(ModifyKind::Any), &[a.as_path()]),
+            ev(EventKind::Create(CreateKind::File), &[a.as_path()]),
+        ];
+        let (changed, removed) = partition_events(&events, vault);
+        assert_eq!(changed, vec!["note.md"]);
+        assert!(removed.is_empty());
+    }
+
+    #[test]
+    fn partition_events_filters_ignored_paths() {
+        let vault = Path::new("/tmp/vault");
+        let dotfile = vault.join(".zenvault/index.db");
+        let real = vault.join("notes.md");
+        let events = vec![
+            ev(EventKind::Modify(ModifyKind::Any), &[dotfile.as_path(), real.as_path()]),
+        ];
+        let (changed, removed) = partition_events(&events, vault);
+        assert_eq!(changed, vec!["notes.md"]);
+        assert!(removed.is_empty());
+    }
+
+    #[test]
+    fn partition_events_filters_tmp_atomic_write_artifacts() {
+        let vault = Path::new("/tmp/vault");
+        let tmp = vault.join(".note.md.tmp");
+        let events = vec![
+            ev(EventKind::Create(CreateKind::File), &[tmp.as_path()]),
+        ];
+        let (changed, removed) = partition_events(&events, vault);
+        assert!(changed.is_empty());
+        assert!(removed.is_empty());
+    }
+}
